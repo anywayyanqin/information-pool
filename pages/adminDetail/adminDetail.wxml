@@ -1,0 +1,94 @@
+<block wx:if="{{rec}}">
+  <view class="card">
+    <view class="th-head">
+      <text class="th-seq">#{{rec.seq || '—'}}</text>
+      <text class="pool-badge pool-badge-{{statusClass}}">{{statusText}}</text>
+      <view style="flex:1"></view>
+      <text class="th-time">{{rec.timeText}}</text>
+    </view>
+    <view class="th-reporter">{{rec.reporter.dept}}｜{{rec.reporter.name}}{{rec.customerName ? ' · 客户：' + rec.customerName : ''}}{{rec.sourceOther ? ' · 其他来源：' + rec.sourceOther : ''}}</view>
+    <view class="th-tags" wx:if="{{rec.sources.length}}">
+      <text class="th-tag" wx:for="{{rec.sources}}" wx:key="*this">{{item}}</text>
+    </view>
+    <view class="th-tags">
+      <text class="th-pool {{item.isMain ? 'th-pool-main' : 'th-pool-sub'}}" wx:for="{{poolView}}" wx:key="key">{{item.name}}{{item.replied ? ' ✓' : ''}}</text>
+    </view>
+    <view class="th-content">{{rec.content || '（无文字描述）'}}</view>
+    <view class="att-grid" wx:if="{{rec.attachments.length}}">
+      <view class="att-item" wx:for="{{rec.attachments}}" wx:key="path">
+        <image
+          wx:if="{{item.kind === 'image'}}"
+          class="att-img"
+          src="{{item.path}}"
+          mode="aspectFill"
+          data-path="{{item.path}}"
+          bindtap="onPreviewImage"
+        />
+        <view wx:else class="att-file" data-index="{{index}}" bindtap="onOpenFile">
+          <view class="att-file-ext">{{item.ext}}</view>
+          <view class="att-file-name">{{item.name}}</view>
+          <view class="att-file-size">{{item.sizeText}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="customer-btn" wx:if="{{rec.customerName}}" bindtap="onOpenCustomer">
+    <text>查看客户信息</text>
+    <text class="customer-btn-arrow">›</text>
+  </view>
+
+  <view class="card act-card" wx:if="{{canRoute}}">
+    <view class="route-btn" wx:if="{{canRoute}}" bindtap="onOpenRouteSheet">分发到分池</view>
+  </view>
+
+  <view class="card">
+    <view class="cm-title">共 {{replyCount}} 条回复</view>
+    <view class="cm-input-row" wx:if="{{canReply}}">
+      <input class="cm-input" placeholder="以本池身份回复…" value="{{replyDraft}}" bindinput="onReplyInput" />
+      <view class="cm-send" bindtap="onSendReply">发送</view>
+    </view>
+    <block wx:if="{{thread.length}}">
+      <block wx:for="{{thread}}" wx:key="index">
+        <view class="cm-sys" wx:if="{{item.kind === 'sys'}}">{{item.text}} · {{item.timeText}}</view>
+        <view class="cm-row" wx:else>
+          <view class="cm-avatar" style="background: {{item.color}};">{{item.initial}}</view>
+          <view class="cm-main">
+            <view class="cm-nameline">
+              <text class="cm-name">{{item.by}}</text>
+              <text class="cm-badge {{item.badgeMain ? 'cm-badge-main' : 'cm-badge-sub'}}">{{item.badge}}</text>
+            </view>
+            <view class="cm-content">{{item.content}}</view>
+            <view class="cm-meta">{{item.timeText}}</view>
+          </view>
+        </view>
+      </block>
+    </block>
+    <view class="cm-empty" wx:else>暂无回复，等待分发与处理</view>
+  </view>
+
+  <view class="forward-btn" wx:if="{{canForward}}" bindtap="onOpenForwardSheet">流转给其他人员</view>
+
+  <view class="page-pad"></view>
+</block>
+
+<view class="mask" wx:if="{{sheet.show}}" bindtap="onCloseRouteSheet"></view>
+<view class="sheet {{sheet.show ? 'sheet--show' : ''}}" wx:if="{{sheet.show}}">
+  <view class="sheet-head">
+    <text class="sheet-title">{{sheet.mode === 'forward' ? '流转给其他人员' : '分发到分池'}}</text>
+    <text class="sheet-close" bindtap="onCloseRouteSheet">×</text>
+  </view>
+  <view class="sheet-body">
+    <view class="chips">
+      <view
+        class="chip {{sheet.pools.indexOf(item.name) > -1 ? 'chip-on' : ''}}"
+        wx:for="{{sheet.mode === 'forward' ? forwardExecs : executives}}"
+        wx:key="name"
+        data-name="{{item.name}}"
+        bindtap="onToggleRoutePool"
+      >{{item.name}}</view>
+    </view>
+    <view class="sheet-hint">{{sheet.mode === 'forward' ? '本条将同时进入所选人员的分池，原分池保留。' : '可同时选择多个分池，一条消息将同时进入这些池子。'}}</view>
+  </view>
+  <view class="sheet-btn" bindtap="onConfirmRouteSheet">{{sheet.mode === 'forward' ? '确定流转' : '确定分发'}}</view>
+</view>

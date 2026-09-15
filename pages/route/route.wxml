@@ -1,0 +1,99 @@
+<view class="page">
+  <view class="header" style="padding-top: {{statusBarHeight}}px;">
+    <view class="nav-bar">
+      <view class="nav-back" bindtap="onBack">‹</view>
+      <view class="nav-title">信息流转</view>
+      <view class="nav-back nav-back--ghost"></view>
+    </view>
+    <view class="header-sub">为信息打服务标签，并派发至对应服务人员</view>
+  </view>
+
+  <view class="card" wx:if="{{rec}}">
+    <view class="sum-top">
+      <text class="sum-reporter">{{rec.reporter.dept}}｜{{rec.reporter.name}}</text>
+      <text class="sum-time">{{rec.timeText}}</text>
+    </view>
+    <view class="sum-content">{{rec.content || '（无文字描述）'}}</view>
+  </view>
+
+  <view class="card" wx:if="{{picked.length}}">
+    <view class="card-title">已选标签</view>
+    <view class="picked-tags">
+      <view class="picked-tag" wx:for="{{picked}}" wx:key="service">
+        <text>{{item.service}}/{{item.sub}}</text>
+        <text class="picked-x" data-service="{{item.service}}" catchtap="onRemovePick">×</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">服务标签<text class="card-hint">点击选择子项与服务人员</text></view>
+    <view class="grid">
+      <view
+        class="cell {{item.picked ? 'cell--on' : ''}}"
+        wx:for="{{catalogView}}"
+        wx:key="name"
+        data-name="{{item.name}}"
+        bindtap="onOpenService"
+      >
+        <text class="cell-badge cell-badge--new" wx:if="{{item.isNew}}">New</text>
+        <text class="cell-hot" wx:if="{{item.hot}}">🔥</text>
+        <text class="cell-name">{{item.name}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{assigneeObjs.length}}">
+    <view class="card-title">派发人员</view>
+    <view class="assignees">
+      <view class="assignee" wx:for="{{assigneeObjs}}" wx:key="name">
+        <view class="avatar" style="background: {{item.color}};">{{item.initial}}</view>
+        <text class="assignee-name">{{item.name}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="page-pad"></view>
+
+  <view class="submit-bar">
+    <view class="submit-btn" bindtap="onSubmit">确认流转派发</view>
+  </view>
+
+  <view class="mask" wx:if="{{sheetOpen}}" bindtap="onCloseSheet"></view>
+  <view class="sheet {{sheetOpen ? 'sheet--show' : ''}}" wx:if="{{sheetService}}">
+    <view class="sheet-head">
+      <text class="sheet-title">{{sheetService.name}}</text>
+      <text class="sheet-close" bindtap="onCloseSheet">×</text>
+    </view>
+    <view class="sheet-body">
+      <scroll-view scroll-y class="sheet-subs">
+        <view
+          class="sub-item {{item.active ? 'sub-item--on' : ''}}"
+          wx:for="{{sheetService.items}}"
+          wx:key="name"
+          data-name="{{item.name}}"
+          bindtap="onPickSub"
+        >{{item.name}}</view>
+      </scroll-view>
+      <scroll-view scroll-y class="sheet-detail">
+        <view class="detail-title">{{sheetService.subName}}简介</view>
+        <view class="detail-desc">{{sheetService.subDesc}}</view>
+        <view class="detail-title">服务人员</view>
+        <view class="staff-list">
+          <view
+            class="staff {{item.on ? 'staff--on' : ''}}"
+            wx:for="{{sheetStaff}}"
+            wx:key="name"
+            data-name="{{item.name}}"
+            bindtap="onToggleStaff"
+          >
+            <view class="avatar" style="background: {{item.color}};">{{item.initial}}</view>
+            <text class="staff-name">{{item.name}}</text>
+            <view class="staff-check">{{item.on ? '✓' : ''}}</view>
+          </view>
+        </view>
+      </scroll-view>
+    </view>
+    <view class="sheet-btn" bindtap="onConfirmService">确定</view>
+  </view>
+</view>

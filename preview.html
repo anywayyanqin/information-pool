@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>信息收集 · 预览</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { background: #e5e7ee; font-family: -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif; display: flex; justify-content: center; }
+  .phone { width: 414px; max-width: 100vw; min-height: 100vh; background: #f2f3f7; position: relative; box-shadow: 0 0 40px rgba(0,0,0,.12); }
+
+  .header { position: relative; background: linear-gradient(135deg, #122a63 0%, #1d47b0 55%, #2f6bff 100%); padding: 44px 16px 20px; border-radius: 0 0 16px 16px; overflow: hidden; text-align: center; }
+  .header-title { color: #fff; font-size: 24px; font-weight: 600; letter-spacing: 2px; }
+  .header-sub { color: rgba(255,255,255,.6); font-size: 12px; margin-top: 6px; }
+  .header-deco { position: absolute; right: -30px; top: -30px; width: 130px; height: 130px; border-radius: 50%; background: rgba(255,255,255,.05); }
+
+  .picked-scroll { margin-top: 10px; overflow-x: auto; white-space: nowrap; scrollbar-width: none; }
+  .picked-scroll::-webkit-scrollbar { display: none; }
+  .picked-bar { display: inline-flex; align-items: center; padding: 0 12px; }
+  .picked-label { font-size: 12px; color: #9aa3b5; margin-right: 8px; }
+  .picked-chip { display: inline-flex; align-items: center; background: #e9efff; color: #2f6bff; font-size: 12px; border-radius: 999px; padding: 4px 10px; margin-right: 8px; cursor: pointer; }
+  .picked-x { margin-left: 5px; color: #9db4e8; }
+
+  .card { background: #fff; border-radius: 12px; margin: 12px 12px 0; padding: 14px; box-shadow: 0 1px 6px rgba(35,44,78,.04); }
+  .card-head { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .card-title { font-size: 15px; font-weight: 600; color: #2b3346; display: flex; align-items: center; }
+  .req { font-size: 10px; color: #f0524d; font-weight: 400; margin-left: 5px; }
+  .card-head-right { display: flex; align-items: center; }
+  .count-badge { min-width: 18px; height: 18px; border-radius: 9px; background: #2b3556; color: #fff; font-size: 11px; display: flex; align-items: center; justify-content: center; padding: 0 4px; margin-right: 8px; }
+  .chev { width: 8px; height: 8px; border-right: 1.5px solid #c3cad9; border-bottom: 1.5px solid #c3cad9; transform: rotate(45deg); transition: transform .2s; }
+  .chev.up { transform: rotate(225deg); }
+
+  .chips { display: flex; flex-wrap: wrap; margin-top: 12px; }
+  .chip { background: #f2f4f8; color: #4a5568; font-size: 13px; border-radius: 999px; padding: 7px 15px; margin: 0 10px 10px 0; border: 1px solid transparent; cursor: pointer; user-select: none; }
+  .chip.on { background: #2b3556; color: #fff; }
+
+  .customer-row { display: flex; align-items: center; background: #f8f9fc; border-radius: 8px; padding: 9px 12px; margin-top: 8px; }
+  .customer-label { font-size: 13px; color: #4a5568; margin-right: 12px; flex-shrink: 0; }
+  .customer-input { flex: 1; width: 100%; font-size: 14px; border: none; background: transparent; outline: none; font-family: inherit; }
+  .customer-field { position: relative; flex: 1; }
+  .customer-dropdown { position: absolute; top: calc(100% + 8px); left: 0; right: 0; background: #fff; border-radius: 8px; box-shadow: 0 4px 16px rgba(35,44,78,.16); max-height: 180px; overflow-y: auto; display: none; z-index: 30; }
+  .customer-option { padding: 10px 12px; font-size: 13px; color: #2b3346; cursor: pointer; border-bottom: 1px solid #f0f2f7; }
+  .customer-option:last-child { border-bottom: none; }
+  .customer-option:hover { background: #f2f4f8; }
+
+  .ta { width: 100%; min-height: 120px; background: #f8f9fc; border: none; border-radius: 8px; padding: 12px; font-size: 14px; line-height: 1.6; resize: vertical; outline: none; font-family: inherit; }
+  .ta-bar { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+  .tool { display: flex; align-items: center; background: #eef3ff; color: #2f6bff; font-size: 13px; border-radius: 999px; padding: 6px 14px; cursor: pointer; }
+  .tool-dot { width: 8px; height: 8px; border-radius: 50%; background: #2f6bff; margin-right: 6px; }
+  .counter { font-size: 12px; color: #b3bacb; }
+
+  .att-actions { display: flex; }
+  .att-btn { font-size: 12px; color: #2f6bff; background: #eef3ff; border-radius: 999px; padding: 5px 12px; margin-left: 8px; cursor: pointer; }
+  .att-grid { display: flex; flex-wrap: wrap; margin-top: 10px; }
+  .att-item { position: relative; width: 90px; height: 90px; margin: 0 10px 10px 0; }
+  .att-img { width: 90px; height: 90px; border-radius: 8px; object-fit: cover; cursor: pointer; }
+  .att-file { width: 90px; height: 90px; border-radius: 8px; background: #f2f4f8; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 0 6px; cursor: pointer; }
+  .att-file-ext { background: #2b3556; color: #fff; font-size: 10px; border-radius: 4px; padding: 2px 6px; }
+  .att-file-name { font-size: 11px; color: #4a5568; margin-top: 6px; max-width: 78px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .att-file-size { font-size: 10px; color: #b3bacb; margin-top: 2px; }
+  .att-del { position: absolute; top: -8px; right: -8px; width: 20px; height: 20px; border-radius: 50%; background: rgba(43,51,70,.85); color: #fff; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+  .page-pad { height: 150px; }
+  .actions { position: fixed; bottom: 54px; width: 414px; max-width: 100vw; display: flex; padding: 10px 12px; background: rgba(255,255,255,.96); box-shadow: 0 -1px 6px rgba(35,44,78,.06); z-index: 5; }
+  .btn { flex: 1; height: 44px; border-radius: 999px; display: flex; align-items: center; justify-content: center; font-size: 15px; cursor: pointer; }
+  .btn-ghost { color: #2b3556; border: 1px solid #c9d2e5; margin-right: 12px; background: #fff; }
+  .btn-primary { color: #fff; background: linear-gradient(90deg, #4d8dff, #3b5bff); }
+
+  .tabbar { position: fixed; bottom: 0; width: 414px; max-width: 100vw; display: flex; background: #fff; border-top: 1px solid #e8ebf2; z-index: 10; }
+  .tab { flex: 1; display: flex; flex-direction: column; align-items: center; padding: 6px 0 5px; color: #9aa3b5; cursor: pointer; }
+  .tab.active { color: #2f6bff; }
+  .tab svg { width: 22px; height: 22px; }
+  .tab-text { font-size: 11px; margin-top: 2px; }
+
+  .filters { display: flex; margin: 12px 12px 0; background: #fff; border-radius: 999px; padding: 4px; }
+  .filter { flex: 1; text-align: center; font-size: 13px; color: #9aa3b5; padding: 7px 0; border-radius: 999px; cursor: pointer; }
+  .filter.on { background: #2b3556; color: #fff; }
+  .empty { text-align: center; padding: 80px 0; }
+  .empty-title { font-size: 15px; color: #9aa3b5; }
+  .empty-sub { font-size: 12px; color: #c3cad9; margin-top: 6px; }
+  .rec { background: #fff; border-radius: 12px; margin: 12px 12px 0; padding: 14px; cursor: pointer; }
+  .rec-top { display: flex; align-items: center; justify-content: space-between; }
+  .badge { font-size: 11px; border-radius: 4px; padding: 2px 8px; }
+  .badge-submitted { background: #e6f7ee; color: #1faa5c; }
+  .badge-draft { background: #fff4e5; color: #f08c1a; }
+  .rec-time { font-size: 11px; color: #b3bacb; }
+  .rec-tags { display: flex; flex-wrap: wrap; margin-top: 8px; }
+  .rec-tag { font-size: 11px; color: #2f6bff; background: #e9efff; border-radius: 999px; padding: 2px 9px; margin: 0 6px 6px 0; }
+  .tag-src { color: #6b7690; background: #f2f4f8; }
+  .rec-content { font-size: 14px; color: #2b3346; line-height: 1.6; margin-top: 4px; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .rec-foot { font-size: 11px; color: #9aa3b5; margin-top: 6px; }
+
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; align-items: flex-end; justify-content: center; z-index: 50; }
+  .overlay.show { display: flex; }
+  .sheet { background: #f2f3f7; width: 414px; max-width: 100vw; max-height: 82vh; overflow-y: auto; border-radius: 16px 16px 0 0; padding-bottom: 20px; }
+  .sheet .card:first-child { margin-top: 12px; }
+  .g-title { font-size: 13px; color: #9aa3b5; margin-bottom: 8px; }
+  .g-tag { font-size: 13px; color: #2f6bff; background: #e9efff; border-radius: 999px; padding: 4px 12px; margin: 0 8px 8px 0; display: inline-block; }
+  .content-box { font-size: 14px; color: #2b3346; line-height: 1.7; white-space: pre-wrap; }
+  .close-btn { margin: 12px 12px 0; height: 40px; border-radius: 999px; background: #2b3556; color: #fff; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+  .toast { position: fixed; left: 50%; bottom: 140px; transform: translateX(-50%); background: rgba(0,0,0,.72); color: #fff; font-size: 13px; border-radius: 8px; padding: 10px 18px; display: none; z-index: 99; max-width: 320px; text-align: center; }
+
+  /* ---- 管理端 ---- */
+  .rec-reporter { font-size: 13px; color: #2b3346; font-weight: 600; }
+  .rec-customer { display: flex; align-items: center; justify-content: space-between; background: #f0f5ff; border-radius: 6px; padding: 8px 10px; margin-top: 8px; cursor: pointer; }
+  .rec-customer-name { font-size: 13px; color: #2b3346; }
+  .rec-customer-link { font-size: 12px; color: #2f6bff; }
+  .customer-btn { margin: 12px 12px 0; padding: 12px 14px; background: #f0f5ff; border-radius: 12px; display: flex; align-items: center; justify-content: space-between; color: #2f6bff; font-size: 14px; font-weight: 500; cursor: pointer; }
+  .rec-route { display: flex; align-items: center; justify-content: space-between; margin-top: 8px; padding-top: 8px; border-top: 1px solid #f2f3f7; cursor: pointer; }
+  .rec-route-text { flex: 1; font-size: 11px; color: #6b7690; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-right: 8px; }
+  .rec-route-text.empty { color: #c3cad9; }
+  .rec-route-link { font-size: 12px; color: #2f6bff; flex-shrink: 0; }
+  .route-foot { font-size: 11px; color: #9aa3b5; margin-top: 2px; }
+
+  .route-inline { margin-top: 12px; padding-top: 12px; border-top: 1px solid #f2f3f7; }
+  .route-inline-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .route-inline-title { font-size: 15px; font-weight: 600; color: #1f2430; }
+  .route-inline-hint { font-size: 11px; color: #9aa3b5; }
+  .route-inline-submit { margin-top: 12px; height: 40px; border-radius: 999px; background: linear-gradient(90deg, #4d8dff, #3b5bff); color: #fff; font-size: 14px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+  /* ---- 信息流转 ---- */
+  .rtv { position: absolute; inset: 0; background: #f2f3f7; z-index: 45; display: none; overflow-y: auto; }
+  .rtv.show { display: block; }
+  .rtv-header { background: linear-gradient(135deg, #122a63 0%, #1d47b0 55%, #2f6bff 100%); padding: 24px 14px 20px; border-radius: 0 0 16px 16px; }
+  .rtv-nav { display: flex; align-items: center; justify-content: space-between; }
+  .rtv-back { width: 32px; height: 32px; line-height: 30px; text-align: center; color: #fff; font-size: 24px; cursor: pointer; }
+  .rtv-back.ghost { visibility: hidden; }
+  .rtv-title { color: #fff; font-size: 17px; font-weight: 600; }
+  .rtv-sub { margin-top: 6px; text-align: center; color: rgba(255,255,255,.65); font-size: 12px; }
+  .rtv-card-title { font-size: 15px; font-weight: 600; color: #1f2430; margin-bottom: 10px; }
+  .rtv-hint { font-size: 11px; font-weight: 400; color: #9aa3b5; margin-left: 6px; }
+  .rtv-sum-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .rtv-sum-reporter { font-size: 12px; color: #6b7690; }
+  .rtv-sum-time { font-size: 11px; color: #b3bacb; }
+  .rtv-sum-content { font-size: 14px; color: #2b3346; line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+  .picked-tags { display: flex; flex-wrap: wrap; }
+  .picked-tag { display: flex; align-items: center; background: #2b3556; color: #fff; font-size: 12px; border-radius: 999px; padding: 5px 10px; margin: 0 8px 8px 0; }
+  .picked-x { margin-left: 5px; color: #9db4e8; cursor: pointer; }
+  .rtv-grid { display: flex; flex-wrap: wrap; justify-content: space-between; }
+  .cell { position: relative; width: 31.5%; margin-bottom: 8px; padding: 14px 4px; background: #f2f4f8; border-radius: 6px; border: 1px solid transparent; text-align: center; cursor: pointer; }
+  .cell.on { background: #eef3ff; border-color: #2f6bff; }
+  .cell-name { font-size: 12px; color: #2b3346; }
+  .cell.on .cell-name { color: #2f6bff; font-weight: 600; }
+  .cell-new { position: absolute; top: -6px; left: 8px; background: #f0524d; color: #fff; font-size: 9px; border-radius: 4px 4px 4px 0; padding: 1px 5px; }
+  .cell-hot { position: absolute; top: -8px; right: 6px; font-size: 14px; }
+  .assignees { display: flex; flex-wrap: wrap; }
+  .assignee { display: flex; align-items: center; background: #f7f8fb; border-radius: 999px; padding: 4px 10px 4px 4px; margin: 0 8px 8px 0; }
+  .avatar { width: 24px; height: 24px; border-radius: 50%; color: #fff; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .assignee-name { margin-left: 6px; font-size: 13px; color: #2b3346; }
+  .rtv-submit { margin: 16px 12px 20px; height: 44px; border-radius: 999px; background: linear-gradient(90deg, #4d8dff, #3b5bff); color: #fff; font-size: 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .rmask { position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 60; display: none; }
+  .rmask.show { display: block; }
+  .rsheet { position: fixed; bottom: 0; left: 50%; transform: translateX(-50%); width: 414px; max-width: 100vw; background: #fff; border-radius: 16px 16px 0 0; z-index: 61; display: none; flex-direction: column; max-height: 72vh; }
+  .rsheet.show { display: flex; }
+  .rsheet-head { display: flex; align-items: center; justify-content: center; position: relative; padding: 14px 0 10px; }
+  .rsheet-title { font-size: 16px; font-weight: 600; color: #1f2430; }
+  .rsheet-close { position: absolute; right: 16px; top: 8px; font-size: 22px; color: #9aa3b5; cursor: pointer; }
+  .rsheet-body { display: flex; min-height: 240px; max-height: 46vh; }
+  .rsheet-subs { width: 36%; background: #f7f8fb; overflow-y: auto; }
+  .sub-item { padding: 14px 12px; font-size: 13px; color: #454b5a; cursor: pointer; }
+  .sub-item.on { background: #fff; color: #2f6bff; font-weight: 600; }
+  .rsheet-detail { flex: 1; padding: 12px 14px; overflow-y: auto; }
+  .detail-title { font-size: 13px; color: #9aa3b5; margin-bottom: 6px; }
+  .detail-desc { font-size: 14px; color: #1f2430; line-height: 1.6; margin-bottom: 14px; }
+  .staff-list { display: flex; flex-wrap: wrap; }
+  .staff { display: flex; align-items: center; border: 1px solid #e3e8f2; border-radius: 999px; padding: 4px 10px 4px 4px; margin: 0 8px 8px 0; cursor: pointer; }
+  .staff.on { border-color: #2f6bff; background: #eef3ff; }
+  .staff-name { margin-left: 6px; font-size: 13px; color: #2b3346; }
+  .staff-check { width: 14px; margin-left: 4px; color: #2f6bff; font-size: 13px; }
+  .rsheet-btn { margin: 10px 12px 14px; height: 42px; border-radius: 999px; background: linear-gradient(90deg, #4d8dff, #3b5bff); color: #fff; font-size: 15px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+
+  /* ---- 客户360 ---- */
+  .c360 { position: absolute; inset: 0; background: #f2f3f7; z-index: 40; display: none; overflow-y: auto; }
+  .c360.show { display: block; }
+  .c360-header { background: linear-gradient(135deg, #122a63 0%, #1d47b0 55%, #2f6bff 100%); padding: 24px 14px 48px; }
+  .c360-nav { display: flex; align-items: center; justify-content: space-between; }
+  .c360-back { width: 32px; height: 32px; line-height: 30px; text-align: center; color: #fff; font-size: 24px; cursor: pointer; }
+  .c360-back.ghost { visibility: hidden; }
+  .c360-nav-title { color: #fff; font-size: 17px; font-weight: 600; }
+  .c360-head { margin-top: 12px; }
+  .c360-name { color: #fff; font-size: 22px; font-weight: 700; }
+  .c360-account { margin-top: 6px; color: rgba(255,255,255,.75); font-size: 13px; }
+  .c360-tags { display: flex; flex-wrap: wrap; margin-top: 10px; }
+  .c360-tag { margin: 0 6px 6px 0; padding: 4px 10px; border-radius: 999px; background: rgba(255,255,255,.18); color: #fff; font-size: 11px; }
+  .c360 .card:first-of-type { margin-top: -32px; }
+  .c360-card-title { font-size: 15px; font-weight: 600; color: #1f2430; margin-bottom: 10px; }
+  .c360-unit { font-size: 12px; font-weight: 400; color: #9aa3b5; }
+  .kv { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; }
+  .kv + .kv { border-top: 1px solid #f2f3f7; }
+  .kv-label { color: #9aa3b5; font-size: 13px; }
+  .kv-value { color: #1f2430; font-size: 13px; font-weight: 500; }
+  .kv-value.accent { color: #e6432d; }
+  .pos { margin-top: 8px; padding-top: 10px; border-top: 1px solid #f2f3f7; }
+  .pos-title { color: #9aa3b5; font-size: 13px; margin-bottom: 6px; }
+  .pos-chips { display: flex; flex-wrap: wrap; }
+  .pos-chip { margin: 0 6px 6px 0; padding: 4px 10px; border-radius: 999px; background: #f0f5ff; color: #2f6bff; font-size: 12px; }
+  .svc-summary { color: #2f6bff; font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+  .svc-row { display: flex; justify-content: space-between; align-items: center; padding: 7px 0; }
+  .svc-row + .svc-row { border-top: 1px solid #f2f3f7; }
+  .svc-dept { color: #1f2430; font-size: 13px; }
+  .svc-count { color: #9aa3b5; font-size: 12px; }
+  .tl-item { position: relative; padding-left: 18px; padding-bottom: 14px; }
+  .tl-item:last-child { padding-bottom: 0; }
+  .tl-dot { position: absolute; left: 0; top: 5px; width: 8px; height: 8px; border-radius: 50%; background: #2f6bff; }
+  .tl-line { position: absolute; left: 3.5px; top: 16px; bottom: 0; width: 1px; background: #e3e8f2; }
+  .tl-head { display: flex; align-items: center; }
+  .tl-date { color: #1f2430; font-size: 13px; font-weight: 600; }
+  .tl-type { margin-left: 8px; padding: 2px 8px; border-radius: 999px; background: #f0f5ff; color: #2f6bff; font-size: 11px; }
+  .tl-owner, .tl-target { margin-top: 4px; color: #9aa3b5; font-size: 12px; }
+  .tl-desc { margin-top: 4px; color: #454b5a; font-size: 13px; line-height: 1.6; }
+  .rp { padding: 10px; border-radius: 8px; background: #f7f8fb; cursor: pointer; }
+  .rp + .rp { margin-top: 8px; }
+  .rp-content { color: #1f2430; font-size: 13px; line-height: 1.6; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  .rp-meta { margin-top: 5px; color: #9aa3b5; font-size: 11px; }
+
+  /* ---- 总池/分池 ---- */
+  .pool-filter { display: flex; margin: 12px 12px 0; background: #fff; border-radius: 999px; padding: 4px; overflow-x: auto; scrollbar-width: none; }
+  .pool-filter::-webkit-scrollbar { display: none; }
+  .pool-chip { flex-shrink: 0; text-align: center; font-size: 13px; color: #9aa3b5; padding: 7px 14px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .pool-chip.on { background: #2b3556; color: #fff; }
+  .pool-badge { font-size: 10px; border-radius: 4px; padding: 1px 6px; margin-left: 4px; }
+  .pool-badge-pending { background: #fff4e5; color: #f08c1a; }
+  .pool-badge-processing { background: #e9efff; color: #2f6bff; }
+  .pool-badge-done { background: #e6f7ee; color: #1faa5c; }
+  .pool-badge-closed { background: #f2f4f8; color: #9aa3b5; }
+  .pool-tags { display: flex; flex-wrap: wrap; margin-top: 8px; }
+  .pool-tag { font-size: 11px; border-radius: 999px; padding: 3px 10px; margin: 0 6px 6px 0; display: flex; align-items: center; }
+  .pool-tag.main { background: #2b3556; color: #fff; }
+  .pool-tag.sub { background: #e9efff; color: #2f6bff; }
+  .pool-tag.replied::after { content: ' ✓'; }
+  .route-btn { margin-top: 10px; height: 36px; border-radius: 999px; background: linear-gradient(90deg, #4d8dff, #3b5bff); color: #fff; font-size: 13px; display: flex; align-items: center; justify-content: center; cursor: pointer; }
+  .reply-view { margin-top: 6px; padding: 10px; background: #f7f8fb; border-radius: 8px; font-size: 13px; color: #2b3346; line-height: 1.6; }
+  .reply-meta { margin-top: 4px; font-size: 11px; color: #9aa3b5; }
+
+  /* ---- 编号 + 评论串（管理端详情） ---- */
+  .rec-seq { font-size: 12px; color: #2f6bff; font-weight: 700; margin-right: 6px; }
+  .th-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .th-seq { font-size: 18px; font-weight: 700; color: #1f2430; }
+  .th-reporter { font-size: 12px; color: #6b7690; margin-top: 6px; }
+  .cm-title { font-size: 14px; font-weight: 600; color: #1f2430; margin-bottom: 12px; }
+  .cm-input-row { display: flex; gap: 8px; margin-bottom: 14px; }
+  .cm-input { flex: 1; background: #f2f4f8; border: none; border-radius: 999px; padding: 9px 14px; font-size: 13px; outline: none; font-family: inherit; min-width: 0; }
+  .cm-send { background: #2b3556; color: #fff; border-radius: 999px; padding: 0 16px; font-size: 13px; display: flex; align-items: center; cursor: pointer; flex-shrink: 0; }
+  .cm-row { display: flex; margin-bottom: 16px; }
+  .cm-row:last-child { margin-bottom: 0; }
+  .cm-avatar { width: 34px; height: 34px; border-radius: 50%; color: #fff; font-size: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; margin-right: 10px; }
+  .cm-main { flex: 1; min-width: 0; }
+  .cm-nameline { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  .cm-name { font-size: 13px; color: #6b7690; }
+  .cm-badge { font-size: 10px; border-radius: 4px; padding: 1px 5px; }
+  .cm-badge-author { background: #ffe9ef; color: #f43f5e; }
+  .cm-badge-main { background: #2b3556; color: #fff; }
+  .cm-badge-sub { background: #e9efff; color: #2f6bff; }
+  .cm-content { font-size: 14px; color: #2b3346; line-height: 1.6; margin-top: 4px; white-space: pre-wrap; word-break: break-word; }
+  .cm-meta { font-size: 11px; color: #b3bacb; margin-top: 4px; }
+  .cm-sys { text-align: center; font-size: 11px; color: #b3bacb; margin: 12px 0; }
+  .cm-empty { text-align: center; font-size: 12px; color: #c3cad9; padding: 18px 0 6px; }
+  .act-card { display: flex; gap: 10px; }
+  .act-card .route-btn { flex: 1; margin-top: 0; }
+</style>
+</head>
+<body>
+<div class="phone">
+
+  <!-- ===== 填报页 ===== -->
+  <div id="page-report">
+    <div class="header">
+      <div class="header-title">信息收集</div>
+      <div class="header-sub">信息技术部｜张三</div>
+      <div class="header-deco"></div>
+    </div>
+
+    <div class="picked-scroll" id="pickedScroll" style="display:none">
+      <div class="picked-bar" id="pickedBar"></div>
+    </div>
+
+    <div id="groupCards"></div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">分发对象<span class="req">选填，默认人工流转</span></div>
+      <div class="chips" id="poolChips"></div>
+      <div style="font-size:11px;color:#9aa3b5;margin-top:6px">知道找谁就直投分池；不确定或涉及多条线的，投「人工流转」由倩影总人工分发。</div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" style="margin-bottom:10px">详细描述<span class="req">必填</span></div>
+      <textarea class="ta" id="ta" maxlength="2000" placeholder="请输入信息详情，例如：友商提供的服务内容、希望公司上线的服务产品、行业或市场动态等"></textarea>
+      <div class="ta-bar">
+        <div class="tool" id="voiceBtn"><div class="tool-dot"></div><span>语音输入</span></div>
+        <span class="counter" id="counter">0/2000</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="cursor:default">
+        <div class="card-title">添加附件</div>
+        <div class="att-actions">
+          <div class="att-btn" id="addImageBtn">拍照/相册</div>
+          <div class="att-btn" id="addFileBtn">文件</div>
+        </div>
+      </div>
+      <div class="att-grid" id="attGrid"></div>
+    </div>
+
+    <div class="page-pad"></div>
+
+    <div class="actions">
+      <div class="btn btn-ghost" id="draftBtn">暂存草稿</div>
+      <div class="btn btn-primary" id="submitBtn">提交消息</div>
+    </div>
+  </div>
+
+  <!-- ===== 列表页 ===== -->
+  <div id="page-list" style="display:none">
+    <div class="header">
+      <div class="header-title">我的填报</div>
+      <div class="header-sub">信息技术部｜张三</div>
+      <div class="header-deco"></div>
+    </div>
+    <div class="filters">
+      <div class="filter on" data-f="all">全部</div>
+      <div class="filter" data-f="submitted">已提交</div>
+      <div class="filter" data-f="draft">草稿</div>
+    </div>
+    <div id="recList"></div>
+    <div class="page-pad"></div>
+  </div>
+
+  <!-- ===== 管理端 ===== -->
+  <div id="page-admin" style="display:none">
+    <div class="header">
+      <div class="header-title">管理端</div>
+      <div class="header-sub" id="adminSub">全部已提交信息</div>
+      <div class="header-deco"></div>
+    </div>
+    <div id="adminList"></div>
+    <div class="page-pad"></div>
+  </div>
+
+  <!-- ===== 底部 Tab ===== -->
+  <div class="tabbar">
+    <div class="tab active" id="tab0">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      <span class="tab-text">信息填报</span>
+    </div>
+    <div class="tab" id="tab1">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      <span class="tab-text">我的填报</span>
+    </div>
+    <div class="tab" id="tab2">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      <span class="tab-text">管理端</span>
+    </div>
+  </div>
+
+  <!-- ===== 详情弹层 ===== -->
+  <div class="overlay" id="overlay">
+    <div class="sheet" id="sheet"></div>
+  </div>
+
+  <!-- ===== 客户360 ===== -->
+  <div class="c360" id="c360"></div>
+
+  <!-- ===== 信息流转 ===== -->
+  <div class="rtv" id="routeView"></div>
+  <div class="rmask" id="rmask"></div>
+  <div class="rsheet" id="rsheet"></div>
+
+  <div class="toast" id="toast"></div>
+  <input type="file" id="imageInput" accept="image/*" multiple hidden>
+  <input type="file" id="fileInput" multiple hidden>
+</div>
+
+<script>
+const groups = [
+  { key: 'sources',    title: '信息来源', required: true,  open: true,  options: ['客户反馈','同业交流','行业会议','监管与交易所','网络媒体','其他'] }
+];
+// 模拟客户主数据；正式上线时替换为客户工商信息/客户主数据接口
+const CUSTOMERS = [
+  '宏远钢铁贸易有限公司','中瑞农业发展集团有限公司','金泰有色金属有限公司','东海石化能源有限公司',
+  '天合油脂有限公司','恒利纺织原料有限公司','盛世私募基金管理有限公司','明德资产管理有限公司',
+  '广源物流仓储有限公司','瑞丰农产品贸易有限公司','星辰量化投资管理有限公司','泰山矿业集团有限公司'
+];
+const emptyForm = () => ({ sources: [], customerName: '', sourceOther: '', content: '', attachments: [], pool: 'main' });
+let form = emptyForm();
+let draftId = '';
+let filter = 'all';
+const LS_KEY = 'reports_preview';
+const SEQ_KEY = 'reports_seq_preview';
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+
+function toast(msg) {
+  const t = $('toast');
+  t.textContent = msg;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => { t.style.display = 'none'; }, 1800);
+}
+
+function fmtTime(ts) {
+  const d = new Date(ts), p = (n) => (n < 10 ? '0' + n : '' + n);
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtSize(b) {
+  if (!b) return '';
+  return b < 1048576 ? Math.max(1, Math.round(b/1024)) + 'KB' : (b/1048576).toFixed(1) + 'MB';
+}
+
+/* ---------- 填报页渲染 ---------- */
+function renderGroups() {
+  $('groupCards').innerHTML = groups.map((g, gi) => `
+    <div class="card">
+      <div class="card-head" onclick="toggleGroup(${gi})">
+        <div class="card-title">${g.title}${g.required ? '<span class="req">必填</span>' : ''}</div>
+        <div class="card-head-right">
+          ${form[g.key].length ? `<div class="count-badge">${form[g.key].length}</div>` : ''}
+          <div class="chev ${g.open ? 'up' : ''}"></div>
+        </div>
+      </div>
+      ${g.open ? `<div class="chips">${g.options.map((opt) => `
+        <div class="chip ${form[g.key].includes(opt) ? 'on' : ''}" onclick="toggleChip('${g.key}','${opt}')">${opt}</div>`).join('')}
+      </div>
+      ${g.key === 'sources' && form.sources.includes('客户反馈') ? `
+      <div class="customer-row">
+        <span class="customer-label">客户名称<span class="req">必填</span></span>
+        <div class="customer-field">
+          <input class="customer-input" placeholder="输入关键字搜索客户" value="${esc(form.customerName)}" oninput="setCustomerName(this.value)" onfocus="showCustomerDD()" onblur="hideCustomerDD()">
+          <div class="customer-dropdown" id="customerDD"></div>
+        </div>
+      </div>` : ''}
+      ${g.key === 'sources' && form.sources.includes('其他') ? `
+      <div class="customer-row">
+        <span class="customer-label">其他来源<span class="req">必填</span></span>
+        <input class="customer-input" placeholder="请填写其他来源说明" value="${esc(form.sourceOther)}" oninput="setSourceOther(this.value)">
+      </div>` : ''}` : ''}
+    </div>`).join('');
+}
+
+function renderPicked() {
+  const picked = [];
+  groups.forEach((g) => form[g.key].forEach((label) => picked.push({ group: g.key, label })));
+  $('pickedScroll').style.display = picked.length ? 'block' : 'none';
+  $('pickedBar').innerHTML = '<span class="picked-label">已选</span>' + picked.map((p) =>
+    `<div class="picked-chip" onclick="toggleChip('${p.group}','${p.label}')">${esc(p.label)}<span class="picked-x">×</span></div>`).join('');
+}
+
+function renderPoolChips() {
+  $('poolChips').innerHTML = POOLS.map((p) =>
+    `<div class="chip ${form.pool === p.key ? 'on' : ''}" onclick="setPool('${p.key}')">${p.key === 'main' ? p.name : p.exec}</div>`).join('');
+}
+window.setPool = (key) => { form.pool = key; renderPoolChips(); };
+
+function renderAtts() {
+  $('attGrid').innerHTML = form.attachments.map((a, i) => `
+    <div class="att-item">
+      ${a.kind === 'image'
+        ? `<img class="att-img" src="${a.url}" onclick="window.open('${a.url}')">`
+        : `<div class="att-file"><div class="att-file-ext">${esc(a.ext)}</div><div class="att-file-name">${esc(a.name)}</div><div class="att-file-size">${a.sizeText}</div></div>`}
+      <div class="att-del" onclick="delAtt(${i})">×</div>
+    </div>`).join('');
+}
+
+window.toggleGroup = (gi) => { groups[gi].open = !groups[gi].open; renderGroups(); };
+window.setCustomerName = (v) => { form.customerName = v; renderCustomerDD(v); };
+window.setSourceOther = (v) => { form.sourceOther = v; };
+window.showCustomerDD = () => renderCustomerDD(form.customerName);
+window.hideCustomerDD = () => setTimeout(() => {
+  const dd = document.getElementById('customerDD');
+  if (dd) dd.style.display = 'none';
+}, 150);
+window.pickCustomer = (name) => { form.customerName = name; renderGroups(); };
+
+function renderCustomerDD(kw) {
+  const dd = document.getElementById('customerDD');
+  if (!dd) return;
+  kw = (kw || '').trim();
+  const list = kw ? CUSTOMERS.filter((c) => c.includes(kw)) : CUSTOMERS;
+  if (!list.length) { dd.style.display = 'none'; return; }
+  dd.innerHTML = list.map((c) => `<div class="customer-option" onmousedown="pickCustomer('${c}')">${c}</div>`).join('');
+  dd.style.display = 'block';
+}
+window.toggleChip = (group, label) => {
+  const arr = form[group];
+  const idx = arr.indexOf(label);
+  idx > -1 ? arr.splice(idx, 1) : arr.push(label);
+  renderGroups(); renderPicked();
+};
+window.delAtt = (i) => { form.attachments.splice(i, 1); renderAtts(); };
+
+$('ta').addEventListener('input', (e) => {
+  form.content = e.target.value;
+  $('counter').textContent = e.target.value.length + '/2000';
+});
+
+$('voiceBtn').addEventListener('click', () => {
+  toast('演示环境未接入语音识别插件，正式小程序中可使用语音转文字');
+});
+
+$('addImageBtn').addEventListener('click', () => $('imageInput').click());
+$('addFileBtn').addEventListener('click', () => $('fileInput').click());
+
+$('imageInput').addEventListener('change', (e) => {
+  [...e.target.files].forEach((f) => {
+    if (form.attachments.length >= 9) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      form.attachments.push({ kind: 'image', url: reader.result, name: f.name, ext: 'IMG', sizeText: fmtSize(f.size) });
+      renderAtts();
+    };
+    reader.readAsDataURL(f);
+  });
+  e.target.value = '';
+});
+
+$('fileInput').addEventListener('change', (e) => {
+  [...e.target.files].forEach((f) => {
+    if (form.attachments.length >= 9) return;
+    const ext = (f.name.split('.').pop() || 'FILE').toUpperCase().slice(0, 4);
+    form.attachments.push({ kind: 'file', url: '', name: f.name, ext, sizeText: fmtSize(f.size) });
+  });
+  renderAtts();
+  e.target.value = '';
+});
+
+/* ---------- 存取 ---------- */
+const loadAll = () => JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+const saveAll = (list) => localStorage.setItem(LS_KEY, JSON.stringify(list));
+
+function nextSeq() {
+  const n = (parseInt(localStorage.getItem(SEQ_KEY) || '0', 10) || 0) + 1;
+  localStorage.setItem(SEQ_KEY, String(n));
+  return n;
+}
+
+function synthTimeline(rec) {
+  const tl = [{ type: 'submit', by: (rec.reporter && rec.reporter.name) || '张三', at: rec.createdAt || rec.updatedAt || Date.now(), pool: (rec.pools && rec.pools[0]) || 'main' }];
+  if (rec.pools && rec.pools.length && !rec.pools.includes('main')) {
+    tl.push({ type: 'route', by: MAIN_POOL_ADMIN, at: rec.updatedAt || Date.now(), pools: rec.pools.slice() });
+  }
+  Object.entries(rec.replies || {}).forEach(([k, v]) => tl.push({ type: 'reply', by: v.by || k, pool: k, content: v.content, at: v.at }));
+  if (rec.closed) tl.push({ type: 'close', by: rec.closedBy || MAIN_POOL_ADMIN, at: rec.closedAt || rec.updatedAt || Date.now() });
+  return tl.sort((a, b) => a.at - b.at);
+}
+
+function migrateAll() {
+  const list = loadAll();
+  list.slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach((r) => { if (!r.seq) r.seq = nextSeq(); });
+  list.forEach((r) => {
+    if (!r.pools) r.pools = ['main'];
+    if (!r.replies) r.replies = {};
+    if (r.closed === undefined) r.closed = false;
+    if (!r.timeline) r.timeline = synthTimeline(r);
+  });
+  saveAll(list);
+}
+
+function buildRecord(status) {
+  const now = Date.now();
+  const old = draftId ? loadAll().find((r) => r.id === draftId) : null;
+  let timeline = old && old.timeline
+    ? old.timeline
+    : [{ type: 'submit', by: '张三', at: now, pool: form.pool }];
+  if (status === 'submitted' && timeline.length === 1 && timeline[0].type === 'submit') {
+    timeline = [{ type: 'submit', by: timeline[0].by, at: timeline[0].at, pool: form.pool }];
+  }
+  return {
+    id: draftId || 'r_' + now,
+    seq: old && old.seq ? old.seq : nextSeq(),
+    status,
+    sources: form.sources,
+    customerName: form.customerName.trim(),
+    sourceOther: form.sourceOther.trim(),
+    content: form.content.trim(),
+    attachments: form.attachments,
+    pools: [form.pool],
+    replies: old ? old.replies || {} : {},
+    closed: false,
+    timeline,
+    reporter: { dept: '信息技术部', name: '张三' },
+    createdAt: old ? old.createdAt : now,
+    updatedAt: now
+  };
+}
+
+function upsert(rec) {
+  const list = loadAll();
+  const idx = list.findIndex((r) => r.id === rec.id);
+  idx > -1 ? (list[idx] = rec) : list.unshift(rec);
+  saveAll(list);
+}
+
+$('draftBtn').addEventListener('click', () => {
+  const hasAny = groups.some((g) => form[g.key].length) || form.customerName.trim() || form.sourceOther.trim() || form.content.trim() || form.attachments.length;
+  if (!hasAny) { toast('表单为空，无需保存'); return; }
+  const rec = buildRecord('draft');
+  upsert(rec);
+  draftId = rec.id;
+  toast('草稿已保存');
+});
+
+$('submitBtn').addEventListener('click', () => {
+  if (!form.sources.length) { toast('请选择信息来源'); return; }
+  if (form.sources.includes('客户反馈') && !form.customerName.trim()) { toast('请输入客户名称'); return; }
+  if (form.sources.includes('其他') && !form.sourceOther.trim()) { toast('请填写其他来源说明'); return; }
+  if (!form.content.trim()) { toast('请填写信息描述'); return; }
+  upsert(buildRecord('submitted'));
+  form = emptyForm(); draftId = '';
+  $('ta').value = ''; $('counter').textContent = '0/2000';
+  renderGroups(); renderPicked(); renderPoolChips(); renderAtts();
+  toast('提交成功');
+  setTimeout(() => showPage(1), 500);
+});
+
+/* ---------- 列表页 ---------- */
+function renderRecords() {
+  const list = loadAll().filter((r) => filter === 'all' || r.status === filter)
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  if (!list.length) {
+    $('recList').innerHTML = `<div class="empty"><div class="empty-title">暂无记录</div><div class="empty-sub">去「信息填报」提交第一条信息吧</div></div>`;
+    return;
+  }
+  $('recList').innerHTML = list.map((r) => `
+    <div class="rec" onclick="openRec('${r.id}','${r.status}')">
+      <div class="rec-top">
+        <span><span class="rec-seq">#${r.seq || '—'}</span><span class="badge badge-${r.status}">${r.status === 'draft' ? '草稿' : '已提交'}</span></span>
+        <span class="rec-time">${fmtTime(r.updatedAt)}</span>
+      </div>
+      ${(r.sources || []).length ? `<div class="rec-tags">
+        ${r.sources.map((s) => `<span class="rec-tag">${esc(s)}</span>`).join('')}
+      </div>` : ''}
+      <div class="rec-content">${esc(r.content || '（无文字描述，点击查看附件）')}</div>
+      ${(() => { const parts = [r.customerName ? '客户：' + esc(r.customerName) : '', r.sourceOther ? '其他来源：' + esc(r.sourceOther) : '', r.attachments.length ? '附件 ' + r.attachments.length + ' 个' : ''].filter(Boolean); return parts.length ? `<div class="rec-foot">${parts.join(' · ')}</div>` : ''; })()}
+      ${r.pools && r.pools.length ? `<div class="pool-tags">${r.pools.map((k) => { const p = POOL_MAP[k]; const rep = r.replies && r.replies[k]; return `<span class="pool-tag ${k === 'main' ? 'main' : 'sub'} ${rep ? 'replied' : ''}">${p ? p.name : k}</span>`; }).join('')}</div>` : ''}
+    </div>`).join('');
+}
+
+document.querySelectorAll('.filter').forEach((el) => el.addEventListener('click', () => {
+  filter = el.dataset.f;
+  document.querySelectorAll('.filter').forEach((x) => x.classList.toggle('on', x === el));
+  renderRecords();
+}));
+
+window.openRec = (id, status) => {
+  const rec = loadAll().find((r) => r.id === id);
+  if (!rec) return;
+  if (status === 'draft') {
+    draftId = rec.id;
+    form.sources = rec.sources || [];
+    form.customerName = rec.customerName || '';
+    form.sourceOther = rec.sourceOther || '';
+    form.content = rec.content || '';
+    form.attachments = rec.attachments || [];
+    form.pool = (rec.pools && rec.pools[0]) || 'main';
+    $('ta').value = form.content;
+    $('counter').textContent = form.content.length + '/2000';
+    renderGroups(); renderPicked(); renderPoolChips(); renderAtts();
+    showPage(0);
+    return;
+  }
+  const groupDefs = [
+    ['信息来源', rec.sources]
+  ].filter(([, items]) => items && items.length);
+  $('sheet').innerHTML = `
+    <div class="card" style="display:flex;align-items:center;gap:10px">
+      <span class="rec-seq">#${rec.seq || '—'}</span>
+      <span class="badge badge-${rec.status}">${rec.status === 'draft' ? '草稿' : '已提交'}</span>
+      <span style="font-size:13px">信息技术部｜张三</span>
+      ${rec.customerName ? `<span style="font-size:13px">客户：${esc(rec.customerName)}</span>` : ''}
+      ${rec.sourceOther ? `<span style="font-size:13px">其他来源：${esc(rec.sourceOther)}</span>` : ''}
+      <span style="font-size:12px;color:#b3bacb">${fmtTime(rec.updatedAt)}</span>
+    </div>
+    ${rec.customerName ? `<div class="customer-btn" onclick="closeSheet();openCustomer('${esc(rec.customerName)}')"><span>查看客户信息</span><span>›</span></div>` : ''}
+    <div class="card">
+      ${groupDefs.map(([title, items]) => `<div class="g-title">${title}</div><div>${items.map((t) => `<span class="g-tag">${esc(t)}</span>`).join('')}</div>`).join('')}
+      <div class="g-title" style="margin-top:10px">详细描述</div>
+      <div class="content-box">${esc(rec.content || '（无文字描述）')}</div>
+    </div>
+    ${rec.pools && rec.pools.length ? `<div class="card"><div class="g-title">流转信息</div><div class="pool-tags">${rec.pools.map((k) => { const p = POOL_MAP[k]; const rep = rec.replies && rec.replies[k]; return `<span class="pool-tag ${k === 'main' ? 'main' : 'sub'} ${rep ? 'replied' : ''}">${p ? p.name : k}</span>`; }).join('')}</div>${Object.keys(rec.replies || {}).length ? `<div style="margin-top:8px">${Object.entries(rec.replies).map(([k, r]) => `<div class="reply-view"><div class="reply-meta">${POOL_MAP[k] ? POOL_MAP[k].name : k} · ${r.by} · ${fmtTime(r.at)}</div>${esc(r.content)}</div>`).join('')}</div>` : ''}${rec.closed ? `<div class="route-foot">已由 ${esc(rec.closedBy || '管理员')} 关闭 · ${fmtTime(rec.closedAt)}</div>` : ''}</div>` : ''}
+    ${rec.attachments.length ? `<div class="card"><div class="g-title">附件（${rec.attachments.length}）</div><div class="att-grid">${rec.attachments.map((a) => `
+      <div class="att-item">${a.kind === 'image' && a.url
+        ? `<img class="att-img" src="${a.url}" onclick="event.stopPropagation();window.open('${a.url}')">`
+        : `<div class="att-file"><div class="att-file-ext">${esc(a.ext)}</div><div class="att-file-name">${esc(a.name)}</div><div class="att-file-size">${a.sizeText || ''}</div></div>`}</div>`).join('')}</div></div>` : ''}
+    <div class="close-btn" onclick="closeSheet()">关闭</div>`;
+  $('overlay').classList.add('show');
+};
+
+window.closeSheet = () => $('overlay').classList.remove('show');
+$('overlay').addEventListener('click', (e) => { if (e.target === $('overlay')) closeSheet(); });
+
+/* ---------- 客户360 mock（与小程序端 utils/profile.js 同一套逻辑） ---------- */
+function pHash(str) { let h = 0; for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0; return h; }
+function pRng(seed) { let s = seed || 1; return () => { s = (s * 1103515245 + 12345) >>> 0; return s / 4294967296; }; }
+const P_DEPTS = ['IB业务服务部', '国际业务部', '产业服务部', '机构业务部', '财富管理部'];
+const P_TAGS = ['产业', '产业', 'V2', '已落地', '国企', '行情路演', '套期保值', '交易策略', '交割库申请', '高频交易'];
+const P_POSITIONS = ['螺纹钢', '铁矿石', '尿素', '豆粕', '棕榈油', 'PTA', '甲醇', '沪铜', '黄金', '原油'];
+const P_DEMAND_TYPES = ['资料提供', '线上路演', '交易策略', '实地调研', '产业培训'];
+const P_DEMAND_DESCS = ['根据客户需求提供综合套保方案', '提供品种研报与行情解读', '线上路演讲解场外期权应用场景', '制定交割库、交割品牌申请操作流程', '季度投资策略交流会', '基差贸易模式介绍与对接'];
+const P_STAFF = ['罗德东', '董丹璐', '杨鈊汉', '张伟', '李娜', '王强'];
+const P_TARGETS = ['赵总(副总经理)', '钱部长(采购部)', '孙经理(期现部)', '周处长(风控部)'];
+const pPick = (r, arr) => arr[Math.floor(r() * arr.length)];
+const pNum = (r, min, max) => (min + r() * (max - min)).toFixed(2);
+
+function getProfile(name) {
+  const r = pRng(pHash(name));
+  const account = '8' + String(1000000 + Math.floor(r() * 9000000));
+  const tags = [];
+  const tagCount = 3 + Math.floor(r() * 3);
+  while (tags.length < tagCount) { const t = pPick(r, P_TAGS); if (!tags.includes(t)) tags.push(t); }
+  const positions = [];
+  const posCount = 2 + Math.floor(r() * 2);
+  while (positions.length < posCount) { const p = pPick(r, P_POSITIONS); if (!positions.includes(p)) positions.push(p); }
+  const serviceRecords = P_DEPTS.slice(0, 2 + Math.floor(r() * 3)).map((d) => ({ dept: d, online: 1 + Math.floor(r() * 8), offline: Math.floor(r() * 5) }));
+  const demands = [];
+  const demandCount = 2 + Math.floor(r() * 2);
+  for (let i = 0; i < demandCount; i++) {
+    const month = 1 + Math.floor(r() * 8);
+    const day = 1 + Math.floor(r() * 28);
+    const staff = [];
+    const staffCount = 2 + Math.floor(r() * 2);
+    while (staff.length < staffCount) { const s = pPick(r, P_STAFF); if (!staff.includes(s)) staff.push(s); }
+    demands.push({
+      date: '2026-' + (month < 10 ? '0' : '') + month + '-' + (day < 10 ? '0' : '') + day,
+      owner: pPick(r, P_STAFF) + '-' + pPick(r, P_DEPTS),
+      type: pPick(r, P_DEMAND_TYPES),
+      staff: staff.join(','),
+      target: pPick(r, P_TARGETS),
+      desc: pPick(r, P_DEMAND_DESCS)
+    });
+  }
+  demands.sort((a, b) => (a.date < b.date ? 1 : -1));
+  return {
+    name, account, tags,
+    base: {
+      dept: pPick(r, P_DEPTS),
+      openDate: '202' + (3 + Math.floor(r() * 4)) + '-0' + (1 + Math.floor(r() * 9)) + '-1' + Math.floor(r() * 9),
+      status: '正常',
+      phone: '13' + Math.floor(r() * 9) + '****' + String(1000 + Math.floor(r() * 9000))
+    },
+    trading: {
+      equity: pNum(r, 500, 500000), realtimeInOut: '0.00', riskRatio: pNum(r, 20, 90) + '%',
+      monthIncome: pNum(r, 1, 200), yearIncome: pNum(r, 50, 2000), pnl: (r() > 0.4 ? '' : '-') + pNum(r, 10, 5000)
+    },
+    price: {
+      feeTemplate: '交易所1.0' + (1 + Math.floor(r() * 3)) + '倍',
+      marginTemplate: '同交易所标准（+' + Math.floor(r() * 3) + '%）',
+      interest: '无结息',
+      yearPurchase: pNum(r, 50, 2000), totalPurchase: pNum(r, 500, 8000)
+    },
+    positions, serviceRecords, demands
+  };
+}
+
+/* ---------- 服务标签目录（与小程序端 utils/services.js 同一套数据） ---------- */
+const S_POOL = ['王燕勤', '周波', '罗德东', '董丹璐', '杨鈊汉', '张伟', '李娜', '王强'];
+const S_COLORS = ['#2f6bff', '#7c5cff', '#00a6a6', '#e6781a', '#d6336c', '#3d9970'];
+function staffFor(key) {
+  if (key === '数据服务/API数据') return ['王燕勤', '周波'];
+  const h = pHash(key);
+  const a = S_POOL[h % S_POOL.length];
+  let b = S_POOL[(h >>> 4) % S_POOL.length];
+  if (b === a) b = S_POOL[(S_POOL.indexOf(a) + 3) % S_POOL.length];
+  return [a, b];
+}
+const colorFor = (name) => S_COLORS[pHash(name) % S_COLORS.length];
+const SERVICES_RAW = [
+  ['高管协同', { isNew: true }, [['高管拜访陪同', '公司领导陪同拜访重点客户'], ['战略客户对接', '高管层面对接战略客户核心诉求']]],
+  ['投研服务', { hot: true }, [['研报定制', '按客户需求定制品种/专题研究报告'], ['行情解读', '定期行情回顾与展望解读'], ['策略会邀请', '邀请客户参加投资策略交流会']]],
+  ['数据服务', { hot: true }, [['API数据', '提供基本面研究数据及交易参数'], ['基本面数据', '品种供需、库存等基本面数据'], ['个性化数据', '按客户口径定制数据报表'], ['行情数据', '实时行情与历史行情数据服务'], ['研究类数据服务路演', '数据服务能力上门路演']]],
+  ['技术服务', {}, [['系统对接', 'API/CTP 等交易系统对接支持'], ['交易软件支持', '交易软件使用培训与问题处理']]],
+  ['交易执行服务', {}, [['算法交易', 'TWAP/VWAP 等算法单执行'], ['大单执行协助', '大额订单拆单与执行协助']]],
+  ['交易风控服务', {}, [['风控规则设置', '客户风控阈值与预警设置'], ['保证金监控', '保证金监控与追保提醒']]],
+  ['合规服务', {}, [['合规咨询', '业务合规问题咨询'], ['适当性评估', '投资者适当性评估支持']]],
+  ['交割服务', { hot: true }, [['交割库申请', '交割库、交割品牌申请流程支持'], ['交割业务办理', '交割预报、仓单流转协助']]],
+  ['产业协同', { hot: true }, [['产业基地对接', '对接产业链上下游基地资源'], ['产业调研组织', '组织产业链实地调研']]],
+  ['资方资产循环', { hot: true }, [['资方对接', '对接资金方与资产方'], ['资产撮合', '优质资产项目撮合推荐']]],
+  ['B计划', {}, [['专项支持', '重点客户专项服务方案']]],
+  ['资管业务', {}, [['资管产品对接', '资管产品介绍与对接'], ['FOF配置', 'FOF/MOM 配置方案支持']]],
+  ['运营服务', {}, [['账户服务', '开户、变更等账户业务加急'], ['结算支持', '结算单解读与对账支持']]],
+  ['私募一体化服务', {}, [['私募孵化', '私募管理人孵化全流程服务'], ['种子基金', '种子基金投顾对接']]],
+  ['跨境业务', {}, [['外盘开户', '境外账户开户与交易支持'], ['跨境套利', '境内外联动套利方案']]],
+  ['跨市场业务', {}, [['期现联动', '期货现货联动方案设计'], ['跨品种套利', '跨品种价差策略支持']]],
+  ['场内期权', {}, [['期权策略', '场内期权组合策略支持'], ['做市商对接', '期权做市商报价对接']]],
+  ['场外衍生品', { hot: true }, [['场外期权报价', '香草/奇异期权报价'], ['含权贸易', '含权贸易合同结构设计']]],
+  ['会计与税务', {}, [['套保会计', '套期保值会计核算支持'], ['税务咨询', '期货交易税务问题咨询']]],
+  ['品宣', {}, [['品牌活动', '联合品牌活动策划'], ['媒体宣传', '客户案例媒体宣传支持']]],
+  ['人力资源服务', {}, [['人才推荐', '期货行业人才推荐'], ['培训支持', '客户团队期货业务培训']]],
+  ['交易所对接', {}, [['交易所活动', '交易所调研、活动对接'], ['会员服务', '交易所会员事务协调']]]
+];
+const SERVICES = SERVICES_RAW.map(([name, flags, items]) => ({
+  name,
+  isNew: !!flags.isNew,
+  hot: !!flags.hot,
+  items: items.map(([sub, desc]) => ({ name: sub, desc, staff: staffFor(name + '/' + sub) }))
+}));
+
+/* ---------- 人工流转/分池 mock（与小程序端 utils/pools.js 同一套数据） ---------- */
+const MAIN_POOL_ADMIN = '倩影总';
+const EXECUTIVES = [
+  { name: '王冀湘', title: '党委副书记、副总裁（兼任研究所所长）', dept: '研究所' },
+  { name: '闻勇翔', title: '副总裁', dept: '机构业务' },
+  { name: '丁彦文', title: '财务总监', dept: '财务' },
+  { name: '刘军', title: '纪委书记', dept: '纪检' },
+  { name: '齐旭', title: '首席风险官（兼合规与风险管理部总经理）', dept: '合规风控' },
+  { name: '倪韬雍', title: '总经理助理（兼国际业务部总经理）', dept: '国际业务' },
+  { name: '邵嵬敏', title: '总经理助理（兼综合管理部、战略客户部总经理）', dept: '战略客户' },
+  { name: '房迪恺', title: '总经理助理（兼投资部总经理）', dept: '投资' },
+  { name: '牟小凡', title: '人力资源总监', dept: '人力资源' }
+];
+const POOLS = [
+  ...EXECUTIVES.map((e) => ({ key: e.name, name: `${e.dept}分池（${e.name}）`, exec: e.name, dept: e.dept })),
+  { key: 'main', name: '人工流转', admin: MAIN_POOL_ADMIN }
+];
+const POOL_MAP = Object.fromEntries(POOLS.map((p) => [p.key, p]));
+
+/* ---------- 信息流转 ---------- */
+let routeId = '', routeSvc = '', routeSub = '';
+let routeAssignees = [];
+const routeStates = {};
+
+window.openRoute = (id) => {
+  const rec = loadAll().find((r) => r.id === id);
+  if (!rec) return;
+  routeId = id;
+  if (!routeStates[id]) {
+    routeStates[id] = {
+      picked: rec.route ? rec.route.items.slice() : [],
+      assignees: rec.route ? rec.route.assignees.slice() : []
+    };
+  }
+  routeSvc = ''; routeSub = '';
+  renderRoute();
+  $('routeView').classList.add('show');
+  $('routeView').scrollTop = 0;
+};
+window.closeRoute = () => {
+  $('routeView').classList.remove('show');
+  closeRSheet();
+  renderAdmin();
+};
+
+function renderRoute() {
+  const rec = loadAll().find((r) => r.id === routeId);
+  if (!rec) return;
+  const st = routeStates[routeId] || { picked: [], assignees: [] };
+  const pickedNames = st.picked.map((p) => p.service);
+  $('routeView').innerHTML = `
+    <div class="rtv-header">
+      <div class="rtv-nav">
+        <div class="rtv-back" onclick="closeRoute()">‹</div>
+        <div class="rtv-title">信息流转</div>
+        <div class="rtv-back ghost"></div>
+      </div>
+      <div class="rtv-sub">为信息打服务标签，并派发至对应服务人员</div>
+    </div>
+    <div class="card">
+      <div class="rtv-sum-top">
+        <span class="rtv-sum-reporter">${esc((rec.reporter && rec.reporter.dept) || '信息技术部')}｜${esc((rec.reporter && rec.reporter.name) || '张三')}</span>
+        <span class="rtv-sum-time">${fmtTime(rec.updatedAt)}</span>
+      </div>
+      <div class="rtv-sum-content">${esc(rec.content || '（无文字描述）')}</div>
+    </div>
+    ${st.picked.length ? `<div class="card"><div class="rtv-card-title">已选标签</div><div class="picked-tags">
+      ${st.picked.map((p) => `<div class="picked-tag">${esc(p.service)}/${esc(p.sub)}<span class="picked-x" onclick="removePick('${p.service}')">×</span></div>`).join('')}
+    </div></div>` : ''}
+    <div class="card">
+      <div class="rtv-card-title">服务标签<span class="rtv-hint">点击选择子项与服务人员</span></div>
+      <div class="rtv-grid">
+        ${SERVICES.map((s) => `<div class="cell ${pickedNames.includes(s.name) ? 'on' : ''}" onclick="openServiceSheet('${s.name}')">${s.isNew ? '<span class="cell-new">New</span>' : ''}${s.hot ? '<span class="cell-hot">🔥</span>' : ''}<div class="cell-name">${s.name}</div></div>`).join('')}
+      </div>
+    </div>
+    ${st.assignees.length ? `<div class="card"><div class="rtv-card-title">派发人员</div><div class="assignees">
+      ${st.assignees.map((n) => `<div class="assignee"><div class="avatar" style="background:${colorFor(n)}">${n[0]}</div><span class="assignee-name">${esc(n)}</span></div>`).join('')}
+    </div></div>` : ''}
+    <div class="rtv-submit" onclick="submitRoute()">确认流转派发</div>
+    <div class="page-pad"></div>`;
+}
+
+window.openServiceSheet = (name) => {
+  const svc = SERVICES.find((s) => s.name === name);
+  if (!svc) return;
+  routeSvc = name;
+  const st = routeStates[routeId] || { picked: [], assignees: [] };
+  const exist = st.picked.find((p) => p.service === name);
+  routeSub = exist ? exist.sub : svc.items[0].name;
+  routeAssignees = st.assignees.slice();
+  renderRSheet();
+  $('rmask').classList.add('show');
+  $('rsheet').classList.add('show');
+};
+window.closeRSheet = () => {
+  $('rmask').classList.remove('show');
+  $('rsheet').classList.remove('show');
+};
+window.pickSub = (name) => { routeSub = name; renderRSheet(); };
+window.toggleStaff = (name) => {
+  const i = routeAssignees.indexOf(name);
+  if (i > -1) routeAssignees.splice(i, 1);
+  else routeAssignees.push(name);
+  renderRSheet();
+};
+window.confirmService = () => {
+  if (!routeSvc || !routeSub) return;
+  const st = routeStates[routeId] || { picked: [], assignees: [] };
+  st.picked = st.picked.filter((p) => p.service !== routeSvc);
+  st.picked.push({ service: routeSvc, sub: routeSub });
+  st.assignees = routeAssignees.slice();
+  closeRSheet();
+  renderRoute();
+  renderAdmin();
+};
+window.removePick = (service) => {
+  const st = routeStates[routeId];
+  if (!st) return;
+  st.picked = st.picked.filter((p) => p.service !== service);
+  renderRoute();
+  renderAdmin();
+};
+window.submitRoute = () => {
+  const st = routeStates[routeId];
+  if (!st || !st.picked.length) { toast('请选择服务标签'); return; }
+  if (!st.assignees.length) { toast('请选择派发人员'); return; }
+  const list = loadAll();
+  const rec = list.find((r) => r.id === routeId);
+  if (!rec) return;
+  rec.route = { items: st.picked, assignees: st.assignees, by: '张三', at: Date.now() };
+  saveAll(list);
+  if ($('routeView').classList.contains('show')) closeRoute();
+  toast('已流转派发');
+  renderAdmin();
+};
+window.inlineOpenService = (id, svcName) => { routeId = id; openServiceSheet(svcName); };
+window.inlineRemovePick = (id, svc) => { routeId = id; removePick(svc); };
+window.inlineSubmitRoute = (id) => { routeId = id; submitRoute(); };
+
+function renderRSheet() {
+  const svc = SERVICES.find((s) => s.name === routeSvc);
+  if (!svc) return;
+  const sub = svc.items.find((i) => i.name === routeSub) || svc.items[0];
+  routeSub = sub.name;
+  $('rsheet').innerHTML = `
+    <div class="rsheet-head">
+      <div class="rsheet-title">${svc.name}</div>
+      <div class="rsheet-close" onclick="closeRSheet()">×</div>
+    </div>
+    <div class="rsheet-body">
+      <div class="rsheet-subs">
+        ${svc.items.map((i) => `<div class="sub-item ${i.name === sub.name ? 'on' : ''}" onclick="pickSub('${i.name}')">${i.name}</div>`).join('')}
+      </div>
+      <div class="rsheet-detail">
+        <div class="detail-title">${sub.name}简介</div>
+        <div class="detail-desc">${esc(sub.desc)}</div>
+        <div class="detail-title">服务人员</div>
+        <div class="staff-list">
+          ${sub.staff.map((n) => `<div class="staff ${routeAssignees.includes(n) ? 'on' : ''}" onclick="toggleStaff('${n}')"><div class="avatar" style="background:${colorFor(n)}">${n[0]}</div><span class="staff-name">${esc(n)}</span><span class="staff-check">${routeAssignees.includes(n) ? '✓' : ''}</span></div>`).join('')}
+        </div>
+      </div>
+    </div>
+    <div class="rsheet-btn" onclick="confirmService()">确定</div>`;
+}
+$('rmask').addEventListener('click', closeRSheet);
+
+/* ---------- 管理端 ---------- */
+let adminPoolFilter = 'main';
+let routeSheetId = '';
+let routeSheetPools = [];
+let routeSheetMode = 'route';
+
+function getPoolStatus(r) {
+  if (r.closed) return 'closed';
+  if (!r.pools || r.pools.includes('main')) return 'pending';
+  const allReplied = r.pools.every((k) => r.replies && r.replies[k]);
+  return allReplied ? 'done' : 'processing';
+}
+
+function getPoolBadge(r) {
+  const s = getPoolStatus(r);
+  const map = { pending: '待分发', processing: '处理中', done: '待关闭', closed: '已关闭' };
+  return `<span class="pool-badge pool-badge-${s}">${map[s]}</span>`;
+}
+
+function renderPoolFilter() {
+  const chips = [...EXECUTIVES.map((e) => ({ key: e.name, name: e.name })), { key: 'main', name: POOL_MAP.main.name }, { key: 'all', name: '全部' }];
+  return `<div class="pool-filter">${chips.map((c) => `<div class="pool-chip ${adminPoolFilter === c.key ? 'on' : ''}" onclick="setAdminPoolFilter('${c.key}')">${c.name}</div>`).join('')}</div>`;
+}
+window.setAdminPoolFilter = (key) => { adminPoolFilter = key; renderAdmin(); };
+
+function renderAdmin() {
+  const list = loadAll().filter((r) => r.status === 'submitted').sort((a, b) => b.updatedAt - a.updatedAt);
+  let filtered = list;
+  if (adminPoolFilter === 'main') {
+    filtered = list.filter((r) => !r.closed);
+  } else if (adminPoolFilter === 'all') {
+    filtered = list;
+  } else {
+    filtered = list.filter((r) => r.pools && r.pools.includes(adminPoolFilter));
+  }
+  $('adminSub').textContent = (adminPoolFilter === 'main' ? '人工流转 · ' : adminPoolFilter === 'all' ? '全部信息 · ' : POOL_MAP[adminPoolFilter].name + ' · ') + filtered.length + ' 条';
+  if (!filtered.length) {
+    $('adminList').innerHTML = renderPoolFilter() + `<div class="empty"><div class="empty-title">暂无信息</div><div class="empty-sub">切换上方池子查看其他信息</div></div>`;
+    return;
+  }
+  $('adminList').innerHTML = renderPoolFilter() + filtered.map((r) => `
+    <div class="rec" onclick="openAdminRec('${r.id}')">
+      <div class="rec-top">
+        <span><span class="rec-seq">#${r.seq || '—'}</span><span class="rec-reporter">${esc((r.reporter && r.reporter.name) || '张三')}</span>${getPoolBadge(r)}</span>
+        <span class="rec-time">${fmtTime(r.updatedAt)}</span>
+      </div>
+      ${(r.sources || []).length ? `<div class="rec-tags">${r.sources.map((s) => `<span class="rec-tag">${esc(s)}</span>`).join('')}</div>` : ''}
+      <div class="rec-content">${esc(r.content || '（无文字描述）')}</div>
+      <div class="rec-foot">${[r.customerName ? '客户：' + esc(r.customerName) : '', r.sourceOther ? '其他来源：' + esc(r.sourceOther) : '', (r.attachments || []).length ? '附件 ' + r.attachments.length + ' 个' : ''].filter(Boolean).join(' · ')}</div>
+      <div class="pool-tags">
+        ${(r.pools || []).map((k) => { const p = POOL_MAP[k]; const rep = r.replies && r.replies[k]; return `<span class="pool-tag ${k === 'main' ? 'main' : 'sub'} ${rep ? 'replied' : ''}">${p ? p.name : k}</span>`; }).join('')}
+      </div>
+    </div>`).join('');
+}
+
+/* ---------- 管理端 · 编号 + 评论串详情 ---------- */
+let adminRecId = '';
+
+window.openAdminRec = (id) => {
+  adminRecId = id;
+  renderAdminRec();
+  $('overlay').classList.add('show');
+};
+
+function renderAdminRec() {
+  const rec = loadAll().find((r) => r.id === adminRecId);
+  if (!rec) { closeSheet(); return; }
+  const status = getPoolStatus(rec);
+  const statusMap = { pending: '待分发', processing: '处理中', done: '待关闭', closed: '已关闭' };
+  const reporter = rec.reporter || { dept: '信息技术部', name: '张三' };
+  const currentPool = adminPoolFilter !== 'main' && adminPoolFilter !== 'all' ? adminPoolFilter : null;
+  const myReply = currentPool && rec.replies && rec.replies[currentPool];
+  const timeline = (rec.timeline || []).slice().sort((a, b) => a.at - b.at);
+  const replyCount = timeline.filter((e) => e.type === 'reply').length;
+
+  const poolTagsHtml = (rec.pools || []).map((k) => {
+    const p = POOL_MAP[k];
+    const rep = rec.replies && rec.replies[k];
+    return `<span class="pool-tag ${k === 'main' ? 'main' : 'sub'} ${rep ? 'replied' : ''}">${p ? p.name : k}</span>`;
+  }).join('');
+
+  const attsHtml = (rec.attachments || []).length ? `<div class="att-grid">${rec.attachments.map((a) => `
+    <div class="att-item">${a.kind === 'image' && a.url
+      ? `<img class="att-img" src="${a.url}" onclick="event.stopPropagation();window.open('${a.url}')">`
+      : `<div class="att-file"><div class="att-file-ext">${esc(a.ext)}</div><div class="att-file-name">${esc(a.name)}</div><div class="att-file-size">${a.sizeText || ''}</div></div>`}</div>`).join('')}</div>` : '';
+
+  const actions = [];
+  if (!rec.closed && (rec.pools || []).includes('main')) {
+    actions.push(`<div class="route-btn" onclick="openRouteSheet('${rec.id}')">分发到分池</div>`);
+  }
+
+  const replyInput = currentPool && !rec.closed && !myReply ? `
+    <div class="cm-input-row">
+      <input class="cm-input" id="cmReplyInput" placeholder="以「${esc(POOL_MAP[currentPool].name)}」身份回复…">
+      <div class="cm-send" onclick="submitReply('${rec.id}','${currentPool}')">发送</div>
+    </div>` : '';
+
+  const threadHtml = timeline.filter((e) => e.type !== 'submit').map((e) => {
+    if (e.type === 'route') {
+      const names = (e.pools || []).map((k) => (POOL_MAP[k] ? POOL_MAP[k].name : k)).join('、');
+      return `<div class="cm-sys">${esc(e.by)} 将本条分发到 ${esc(names)} · ${fmtTime(e.at)}</div>`;
+    }
+    if (e.type === 'forward') {
+      const names = (e.pools || []).map((k) => (POOL_MAP[k] ? POOL_MAP[k].name : k)).join('、');
+      return `<div class="cm-sys">${esc(e.by)} 将本条流转给 ${esc(names)} · ${fmtTime(e.at)}</div>`;
+    }
+    if (e.type === 'close') {
+      return `<div class="cm-sys">${esc(e.by)} 核对回复，确认关闭 · ${fmtTime(e.at)}</div>`;
+    }
+    const poolName = POOL_MAP[e.pool] ? POOL_MAP[e.pool].name : (e.pool || '');
+    return `
+    <div class="cm-row">
+      <div class="cm-avatar" style="background:${colorFor(e.by || '?')}">${esc((e.by || '?')[0])}</div>
+      <div class="cm-main">
+        <div class="cm-nameline"><span class="cm-name">${esc(e.by || '')}</span><span class="cm-badge ${e.pool === 'main' ? 'cm-badge-main' : 'cm-badge-sub'}">${esc(poolName)}</span></div>
+        <div class="cm-content">${esc(e.content || '')}</div>
+        <div class="cm-meta">${fmtTime(e.at)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  $('sheet').innerHTML = `
+    <div class="card">
+      <div class="th-head">
+        <span class="th-seq">#${rec.seq || '—'}</span>
+        <span class="pool-badge pool-badge-${status}" style="margin-left:0">${statusMap[status]}</span>
+        <span style="flex:1"></span>
+        <span class="rec-time">${fmtTime(rec.createdAt || rec.updatedAt)}</span>
+      </div>
+      <div class="th-reporter">${esc(reporter.dept)}｜${esc(reporter.name)}${rec.customerName ? ' · 客户：' + esc(rec.customerName) : ''}${rec.sourceOther ? ' · 其他来源：' + esc(rec.sourceOther) : ''}</div>
+      ${(rec.sources || []).length ? `<div class="rec-tags">${(rec.sources || []).map((s) => `<span class="rec-tag">${esc(s)}</span>`).join('')}</div>` : ''}
+      <div class="pool-tags">${poolTagsHtml}</div>
+      <div class="content-box" style="margin-top:8px">${esc(rec.content || '（无文字描述）')}</div>
+      ${attsHtml}
+    </div>
+    ${rec.customerName ? `<div class="customer-btn" onclick="closeSheet();openCustomer('${esc(rec.customerName)}')"><span>查看客户信息</span><span>›</span></div>` : ''}
+    ${actions.length ? `<div class="card act-card">${actions.join('')}</div>` : ''}
+    <div class="card">
+      <div class="cm-title">共 ${replyCount} 条回复</div>
+      ${replyInput}
+      ${threadHtml || '<div class="cm-empty">暂无回复，等待分发与处理</div>'}
+    </div>
+    ${!rec.closed ? `<div class="route-btn" style="margin:12px 12px 0" onclick="openForwardSheet('${rec.id}')">流转给其他人员</div>` : ''}`;
+}
+
+window.openRouteSheet = (id) => {
+  routeSheetId = id;
+  routeSheetPools = [];
+  routeSheetMode = 'route';
+  renderRouteSheet();
+  $('rmask').classList.add('show');
+  $('rsheet').classList.add('show');
+};
+
+window.openForwardSheet = (id) => {
+  routeSheetId = id;
+  routeSheetPools = [];
+  routeSheetMode = 'forward';
+  renderRouteSheet();
+  $('rmask').classList.add('show');
+  $('rsheet').classList.add('show');
+};
+
+function renderRouteSheet() {
+  const rec = loadAll().find((r) => r.id === routeSheetId);
+  const isForward = routeSheetMode === 'forward';
+  const candidates = isForward && rec
+    ? EXECUTIVES.filter((e) => !(rec.pools || []).includes(e.name))
+    : EXECUTIVES;
+  $('rsheet').innerHTML = `
+    <div class="rsheet-head">
+      <div class="rsheet-title">${isForward ? '流转给其他人员' : '分发到分池'}</div>
+      <div class="rsheet-close" onclick="closeRSheet()">×</div>
+    </div>
+    <div class="rsheet-body" style="padding: 0 14px;">
+      <div class="chips" style="margin-top: 0;">
+        ${candidates.map((e) => `<div class="chip ${routeSheetPools.includes(e.name) ? 'on' : ''}" onclick="toggleRoutePool('${e.name}')">${e.name}</div>`).join('')}
+      </div>
+      <div style="font-size:12px;color:#9aa3b5;margin-top:12px;">${isForward ? '本条将同时进入所选人员的分池，原分池保留。' : '可同时选择多个分池，一条消息将同时进入这些池子。'}</div>
+    </div>
+    <div class="rsheet-btn" onclick="${isForward ? 'confirmForwardSheet()' : 'confirmRouteSheet()'}">${isForward ? '确定流转' : '确定分发'}</div>`;
+}
+window.toggleRoutePool = (name) => {
+  const i = routeSheetPools.indexOf(name);
+  if (i > -1) routeSheetPools.splice(i, 1);
+  else routeSheetPools.push(name);
+  renderRouteSheet();
+};
+window.confirmRouteSheet = () => {
+  if (!routeSheetPools.length) { toast('请至少选择一个分池'); return; }
+  const list = loadAll();
+  const rec = list.find((r) => r.id === routeSheetId);
+  if (!rec) return;
+  rec.pools = routeSheetPools.slice();
+  rec.replies = rec.replies || {};
+  rec.timeline = rec.timeline || [];
+  rec.timeline.push({ type: 'route', by: MAIN_POOL_ADMIN, at: Date.now(), pools: routeSheetPools.slice() });
+  rec.updatedAt = Date.now();
+  saveAll(list);
+  closeRSheet();
+  toast('已分发到 ' + routeSheetPools.length + ' 个分池');
+  renderAdmin();
+  if (adminRecId === routeSheetId && $('overlay').classList.contains('show')) renderAdminRec();
+};
+window.confirmForwardSheet = () => {
+  if (!routeSheetPools.length) { toast('请选择要流转的人员'); return; }
+  const list = loadAll();
+  const rec = list.find((r) => r.id === routeSheetId);
+  if (!rec) return;
+  const merged = (rec.pools || []).slice();
+  routeSheetPools.forEach((p) => { if (!merged.includes(p)) merged.push(p); });
+  rec.pools = merged.filter((p) => p !== 'main');
+  rec.timeline = rec.timeline || [];
+  const by = adminPoolFilter !== 'main' && adminPoolFilter !== 'all' ? adminPoolFilter : MAIN_POOL_ADMIN;
+  rec.timeline.push({ type: 'forward', by, at: Date.now(), pools: routeSheetPools.slice() });
+  rec.updatedAt = Date.now();
+  saveAll(list);
+  closeRSheet();
+  toast('已流转给 ' + routeSheetPools.length + ' 位人员');
+  renderAdmin();
+  if (adminRecId === routeSheetId && $('overlay').classList.contains('show')) renderAdminRec();
+};
+window.submitReply = (id, pool) => {
+  const input = $('cmReplyInput') || $('reply_' + id);
+  const content = input ? input.value.trim() : '';
+  if (!content) { toast('请输入回复内容'); return; }
+  const list = loadAll();
+  const rec = list.find((r) => r.id === id);
+  if (!rec) return;
+  rec.replies = rec.replies || {};
+  rec.replies[pool] = { content, by: pool, at: Date.now() };
+  rec.timeline = rec.timeline || [];
+  rec.timeline.push({ type: 'reply', by: pool, pool, content, at: Date.now() });
+  rec.updatedAt = Date.now();
+  saveAll(list);
+  toast('回复已提交');
+  renderAdmin();
+  if (adminRecId === id && $('overlay').classList.contains('show')) renderAdminRec();
+};
+
+/* ---------- 客户360视图 ---------- */
+window.openCustomer = (name) => {
+  const p = getProfile(name);
+  const tradingRows = [['客户权益', p.trading.equity], ['当年经纪业务净收入', p.trading.monthIncome], ['净留存', p.trading.yearIncome], ['净减收', p.trading.pnl], ['净利息', p.price.interest]];
+  const priceRows = [['手续费模版', p.price.feeTemplate], ['保证金比例', p.price.marginTemplate], ['结息比例', p.price.interest], ['近一年采购金额（万元）', p.price.yearPurchase], ['历史采购金额（万元）', p.price.totalPurchase]];
+  const online = p.serviceRecords.reduce((s, x) => s + x.online, 0);
+  const offline = p.serviceRecords.reduce((s, x) => s + x.offline, 0);
+  const reports = loadAll().filter((r) => r.status === 'submitted' && r.customerName === name).sort((a, b) => b.updatedAt - a.updatedAt);
+  const kvRows = (rows) => rows.map(([label, value]) =>
+    `<div class="kv"><span class="kv-label">${label}</span><span class="kv-value">${esc(value)}</span></div>`).join('');
+  $('c360').innerHTML = `
+    <div class="c360-header">
+      <div class="c360-nav">
+        <div class="c360-back" onclick="closeCustomer()">‹</div>
+        <div class="c360-nav-title">客户信息</div>
+        <div class="c360-back ghost"></div>
+      </div>
+      <div class="c360-head">
+        <div class="c360-name">${esc(p.name)}</div>
+        <div class="c360-tags">${p.tags.map((t) => `<span class="c360-tag">${esc(t)}</span>`).join('')}</div>
+      </div>
+    </div>
+    <div class="card"><div class="c360-card-title">交易信息<span class="c360-unit">（单位：万元）</span></div>${kvRows(tradingRows)}</div>
+    <div class="card"><div class="c360-card-title">价格信息</div>${kvRows(priceRows)}</div>
+    <div class="card"><div class="c360-card-title">服务跟进记录</div>
+      <div class="svc-summary">线上服务 ${online} 人次 · 线下服务 ${offline} 人次</div>
+      ${p.serviceRecords.map((s) => `<div class="svc-row"><span class="svc-dept">${esc(s.dept)}</span><span class="svc-count">线上 ${s.online} 人次 / 线下 ${s.offline} 人次</span></div>`).join('')}
+    </div>
+    <div class="card"><div class="c360-card-title">历史需求</div>
+      ${p.demands.map((d, i) => `<div class="tl-item"><div class="tl-dot"></div>${i < p.demands.length - 1 ? '<div class="tl-line"></div>' : ''}
+        <div class="tl-head"><span class="tl-date">${d.date}</span><span class="tl-type">${esc(d.type)}</span></div>
+        <div class="tl-owner">${esc(d.owner)} · 跟进人：${esc(d.staff)}</div>
+        <div class="tl-target">目标：${esc(d.target)}</div>
+        <div class="tl-desc">${esc(d.desc)}</div>
+      </div>`).join('')}
+    </div>
+    ${reports.length ? `<div class="card"><div class="c360-card-title">相关填报记录</div>
+      ${reports.map((r) => `<div class="rp" onclick="closeCustomer();openRec('${r.id}','submitted')">
+        <div class="rp-content">${esc(r.content || '')}</div>
+        <div class="rp-meta">${esc((r.reporter && r.reporter.name) || '张三')} · ${fmtTime(r.updatedAt)}</div>
+      </div>`).join('')}
+    </div>` : ''}
+    <div class="page-pad"></div>`;
+  $('c360').classList.add('show');
+  $('c360').scrollTop = 0;
+};
+window.closeCustomer = () => $('c360').classList.remove('show');
+
+/* ---------- 页面切换 ---------- */
+function showPage(i) {
+  $('page-report').style.display = i === 0 ? 'block' : 'none';
+  $('page-list').style.display = i === 1 ? 'block' : 'none';
+  $('page-admin').style.display = i === 2 ? 'block' : 'none';
+  $('tab0').classList.toggle('active', i === 0);
+  $('tab1').classList.toggle('active', i === 1);
+  $('tab2').classList.toggle('active', i === 2);
+  if (i === 1) renderRecords();
+  if (i === 2) renderAdmin();
+  window.scrollTo(0, 0);
+}
+$('tab0').addEventListener('click', () => showPage(0));
+$('tab1').addEventListener('click', () => showPage(1));
+$('tab2').addEventListener('click', () => showPage(2));
+
+migrateAll();
+renderGroups(); renderPicked(); renderPoolChips();
+</script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<block wx:if="{{rec}}">
+  <view class="card head-card">
+    <view class="seq">#{{rec.seq || '—'}}</view>
+    <view class="badge badge-{{rec.status}}">{{rec.status === 'draft' ? '草稿' : '已提交'}}</view>
+    <view class="meta">{{rec.reporter.dept}}｜{{rec.reporter.name}}</view>
+    <view class="meta" wx:if="{{rec.customerName}}">客户：{{rec.customerName}}</view>
+    <view class="meta" wx:if="{{rec.sourceOther}}">其他来源：{{rec.sourceOther}}</view>
+    <view class="meta dim">{{rec.timeText}}</view>
+  </view>
+
+  <view class="customer-btn" wx:if="{{rec.customerName}}" bindtap="onOpenCustomer">
+    <text>查看客户信息</text>
+    <text class="customer-btn-arrow">›</text>
+  </view>
+
+  <view class="card">
+    <block wx:if="{{groups.length}}">
+      <view class="g-title">信息来源</view>
+      <view class="g-tags">
+        <text class="g-tag" wx:for="{{groups[0].items}}" wx:for-item="t" wx:key="*this">{{t}}</text>
+      </view>
+    </block>
+    <view class="g-title" style="margin-top: 8rpx;">详细描述</view>
+    <view class="content">{{rec.content || '（无文字描述）'}}</view>
+  </view>
+
+  <view class="card" wx:if="{{poolTags.length}}">
+    <view class="g-title">流转信息</view>
+    <view class="g-tags">
+      <text class="g-tag {{item.key === 'main' ? 'pool-tag-main' : ''}}" wx:for="{{poolTags}}" wx:key="key">{{item.name}}{{item.replied ? ' ✓' : ''}}</text>
+    </view>
+    <view class="reply-list" wx:if="{{replyList.length}}">
+      <view class="reply-item" wx:for="{{replyList}}" wx:key="pool">
+        <view class="reply-meta">{{item.pool}} · {{item.by}} · {{item.timeText}}</view>
+        <view class="reply-content">{{item.content}}</view>
+      </view>
+    </view>
+    <view class="route-foot" wx:if="{{closedText}}">{{closedText}}</view>
+  </view>
+
+  <view class="card" wx:if="{{rec.attachments.length}}">
+    <view class="g-title">附件（{{rec.attachments.length}}）</view>
+    <view class="att-grid">
+      <view class="att-item" wx:for="{{rec.attachments}}" wx:key="path">
+        <image
+          wx:if="{{item.kind === 'image'}}"
+          class="att-img"
+          src="{{item.path}}"
+          mode="aspectFill"
+          data-path="{{item.path}}"
+          bindtap="onPreviewImage"
+        />
+        <view wx:else class="att-file" data-index="{{index}}" bindtap="onOpenFile">
+          <view class="att-file-ext">{{item.ext}}</view>
+          <view class="att-file-name">{{item.name}}</view>
+          <view class="att-file-size">{{item.sizeText}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="page-pad"></view>
+</block>

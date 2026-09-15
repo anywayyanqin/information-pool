@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>信息池 · 前端原型</title>
+  <link rel="stylesheet" href="assets/app.css?v=31">
+</head>
+<body>
+  <header class="topbar" id="topbar"></header>
+  <main class="page" id="app"></main>
+
+  <div class="mask" id="modalMask" onclick="closeModal()"></div>
+  <div class="modal" id="modal"></div>
+  <div class="cmt-mask" id="cmtMask" onclick="closeCommentPanel()"></div>
+  <div class="cmt-panel" id="cmtPanel"></div>
+  <div class="toast" id="toast"></div>
+
+  <!-- 加载顺序：Mock 数据 -> 状态与动作 -> 权限 -> 视图 -> 路由启动 -->
+  <script src="assets/mock.js?v=31"></script>
+  <script src="assets/store.js?v=31"></script>
+  <script src="assets/perm.js?v=31"></script>
+  <script src="assets/views.js?v=31"></script>
+  <script src="assets/app.js?v=31"></script>
+</body>
+</html>

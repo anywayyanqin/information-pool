@@ -1,0 +1,29 @@
+{
+  "pages": [
+    "pages/report/report",
+    "pages/list/list",
+    "pages/detail/detail",
+    "pages/admin/admin",
+    "pages/adminDetail/adminDetail",
+    "pages/customer/customer",
+    "pages/route/route"
+  ],
+  "window": {
+    "navigationBarBackgroundColor": "#122a63",
+    "navigationBarTitleText": "信息收集",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f2f3f7"
+  },
+  "tabBar": {
+    "custom": true,
+    "color": "#9aa3b5",
+    "selectedColor": "#2f6bff",
+    "list": [
+      { "pagePath": "pages/report/report", "text": "信息填报" },
+      { "pagePath": "pages/list/list", "text": "我的填报" },
+      { "pagePath": "pages/admin/admin", "text": "管理端" }
+    ]
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

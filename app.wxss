@@ -1,0 +1,14 @@
+page {
+  background: #f2f3f7;
+  font-size: 28rpx;
+  color: #2b3346;
+  font-family: -apple-system, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 24rpx;
+  margin: 24rpx 24rpx 0;
+  padding: 28rpx;
+  box-shadow: 0 2rpx 12rpx rgba(35, 44, 78, 0.04);
+}

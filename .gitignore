@@ -1,0 +1,19 @@
+# 微信开发者工具本地配置（含个人账号信息，不入库）
+project.private.config.json
+
+# 依赖与构建产物
+node_modules/
+miniprogram_npm/
+dist/
+
+# 部署暂存目录（preview.html 的发布副本）
+netlify-deploy/
+
+# 编辑器与系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+*.log

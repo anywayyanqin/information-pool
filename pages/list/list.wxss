@@ -1,0 +1,184 @@
+.header {
+  position: relative;
+  background: linear-gradient(135deg, #122a63 0%, #1d47b0 55%, #2f6bff 100%);
+  padding: 0 32rpx 40rpx;
+  border-radius: 0 0 32rpx 32rpx;
+  overflow: hidden;
+  text-align: center;
+}
+
+.header-title {
+  color: #ffffff;
+  font-size: 48rpx;
+  font-weight: 600;
+  letter-spacing: 4rpx;
+  padding-top: 32rpx;
+}
+
+.header-sub {
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 24rpx;
+  margin-top: 12rpx;
+}
+
+.header-deco {
+  position: absolute;
+  right: -60rpx;
+  top: -60rpx;
+  width: 260rpx;
+  height: 260rpx;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.filters {
+  display: flex;
+  margin: 24rpx 24rpx 0;
+  background: #ffffff;
+  border-radius: 999rpx;
+  padding: 8rpx;
+}
+
+.filter {
+  flex: 1;
+  text-align: center;
+  font-size: 26rpx;
+  color: #9aa3b5;
+  padding: 14rpx 0;
+  border-radius: 999rpx;
+}
+
+.filter.on {
+  background: #2b3556;
+  color: #ffffff;
+}
+
+.empty {
+  text-align: center;
+  padding: 160rpx 0;
+}
+
+.empty-title {
+  font-size: 30rpx;
+  color: #9aa3b5;
+}
+
+.empty-sub {
+  font-size: 24rpx;
+  color: #c3cad9;
+  margin-top: 12rpx;
+}
+
+.rec {
+  background: #ffffff;
+  border-radius: 24rpx;
+  margin: 24rpx 24rpx 0;
+  padding: 28rpx;
+}
+
+.rec-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.rec-top-left {
+  display: flex;
+  align-items: center;
+}
+
+.rec-seq {
+  font-size: 26rpx;
+  color: #2f6bff;
+  font-weight: 700;
+  margin-right: 14rpx;
+}
+
+.badge {
+  font-size: 22rpx;
+  border-radius: 8rpx;
+  padding: 4rpx 16rpx;
+}
+
+.badge-submitted {
+  background: #e6f7ee;
+  color: #1faa5c;
+}
+
+.badge-draft {
+  background: #fff4e5;
+  color: #f08c1a;
+}
+
+.rec-time {
+  font-size: 22rpx;
+  color: #b3bacb;
+}
+
+.rec-tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 16rpx;
+}
+
+.rec-tag {
+  font-size: 22rpx;
+  color: #2f6bff;
+  background: #e9efff;
+  border-radius: 999rpx;
+  padding: 4rpx 18rpx;
+  margin: 0 12rpx 12rpx 0;
+}
+
+.tag-src {
+  color: #6b7690;
+  background: #f2f4f8;
+}
+
+.rec-content {
+  font-size: 28rpx;
+  color: #2b3346;
+  line-height: 1.6;
+  margin-top: 8rpx;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
+
+.rec-foot {
+  font-size: 22rpx;
+  color: #9aa3b5;
+  margin-top: 12rpx;
+}
+
+.pool-tags {
+  display: flex;
+  flex-wrap: wrap;
+  margin-top: 16rpx;
+}
+
+.pool-tag {
+  font-size: 22rpx;
+  border-radius: 999rpx;
+  padding: 6rpx 20rpx;
+  margin: 0 12rpx 12rpx 0;
+}
+
+.pool-tag-main {
+  background: #2b3556;
+  color: #ffffff;
+}
+
+.pool-tag-sub {
+  background: #e9efff;
+  color: #2f6bff;
+}
+
+.pool-tag-replied::after {
+  content: ' ✓';
+}
+
+.page-pad {
+  height: 180rpx;
+}

@@ -1,0 +1,134 @@
+<view class="header" style="padding-top: {{statusBarHeight}}px;">
+  <view class="header-title">信息收集</view>
+  <view class="header-sub">{{user.dept}}｜{{user.name}}</view>
+  <view class="header-deco"></view>
+</view>
+
+<scroll-view scroll-x class="picked-scroll" wx:if="{{picked.length}}" enhanced show-scrollbar="{{false}}">
+  <view class="picked-bar">
+    <text class="picked-label">已选</text>
+    <view class="picked-chip" wx:for="{{picked}}" wx:key="key" data-group="{{item.group}}" data-label="{{item.label}}" bindtap="onToggleChip">
+      {{item.label}}<text class="picked-x">×</text>
+    </view>
+  </view>
+</scroll-view>
+
+<view class="card" wx:for="{{groups}}" wx:key="key" wx:for-item="g">
+  <view class="card-head" data-index="{{index}}" bindtap="onToggleGroup">
+    <view class="card-title">
+      {{g.title}}<text class="req" wx:if="{{g.required}}">必填</text>
+    </view>
+    <view class="card-head-right">
+      <view class="count-badge" wx:if="{{counts[g.key]}}">{{counts[g.key]}}</view>
+      <view class="chev {{g.open ? 'chev-up' : ''}}"></view>
+    </view>
+  </view>
+  <block wx:if="{{g.open}}">
+    <view class="chips">
+      <view
+        class="chip {{form[g.key].indexOf(opt) > -1 ? 'chip-on' : ''}}"
+        wx:for="{{g.options}}"
+        wx:for-item="opt"
+        wx:key="*this"
+        data-group="{{g.key}}"
+        data-label="{{opt}}"
+        bindtap="onToggleChip"
+      >{{opt}}</view>
+    </view>
+    <view class="customer-row" wx:if="{{g.key === 'sources' && form.sources.indexOf('客户反馈') > -1}}">
+      <text class="customer-label">客户名称<text class="req">必填</text></text>
+      <view class="customer-field">
+        <input
+          class="customer-input"
+          placeholder="输入关键字搜索客户"
+          value="{{form.customerName}}"
+          bindinput="onCustomerInput"
+          bindfocus="onCustomerFocus"
+          bindblur="onCustomerBlur"
+        />
+        <scroll-view scroll-y class="customer-dropdown" wx:if="{{customerFocus && customerOptions.length}}">
+          <view
+            class="customer-option"
+            wx:for="{{customerOptions}}"
+            wx:key="id"
+            data-name="{{item.name}}"
+            bindtap="onPickCustomer"
+          >{{item.name}}</view>
+        </scroll-view>
+      </view>
+    </view>
+    <view class="customer-row" wx:if="{{g.key === 'sources' && form.sources.indexOf('其他') > -1}}">
+      <text class="customer-label">其他来源<text class="req">必填</text></text>
+      <input class="customer-input" placeholder="请填写其他来源说明" value="{{form.sourceOther}}" bindinput="onSourceOtherInput" />
+    </view>
+  </block>
+</view>
+
+<view class="card">
+  <view class="card-title">分发对象<text class="req">选填，默认人工流转</text></view>
+  <view class="chips">
+    <view
+      class="chip {{form.pool === item.key ? 'chip-on' : ''}}"
+      wx:for="{{pools}}"
+      wx:key="key"
+      data-key="{{item.key}}"
+      bindtap="onSetPool"
+    >{{item.key === 'main' ? item.name : item.exec}}</view>
+  </view>
+  <view class="pool-hint">知道找谁就直投分池；不确定或涉及多条线的，投「人工流转」由倩影总人工分发。</view>
+</view>
+
+<view class="card">
+  <view class="card-title desc-title">详细描述<text class="req">必填</text></view>
+  <textarea
+    class="ta"
+    placeholder="请输入信息详情，例如：友商提供的服务内容、希望公司上线的服务产品、行业或市场动态等"
+    maxlength="2000"
+    value="{{form.content}}"
+    bindinput="onContentInput"
+    disable-default-padding
+  />
+  <view class="voice-tmp" wx:if="{{voiceTmp}}">识别中：{{voiceTmp}}</view>
+  <view class="ta-bar">
+    <view class="tool {{recording ? 'tool-rec' : ''}}" bindtap="onMicTap">
+      <view class="tool-dot"></view>
+      <text>{{recording ? '点击停止' : '语音输入'}}</text>
+    </view>
+    <text class="counter">{{form.content.length}}/2000</text>
+  </view>
+</view>
+
+<view class="card">
+  <view class="card-head att-head">
+    <view class="card-title">添加附件</view>
+    <view class="att-actions">
+      <view class="att-btn" bindtap="onAddImage">拍照/相册</view>
+      <view class="att-btn" bindtap="onAddFile">文件</view>
+    </view>
+  </view>
+  <view class="att-grid" wx:if="{{form.attachments.length}}">
+    <view class="att-item" wx:for="{{form.attachments}}" wx:key="path">
+      <image
+        wx:if="{{item.kind === 'image'}}"
+        class="att-img"
+        src="{{item.path}}"
+        mode="aspectFill"
+        data-path="{{item.path}}"
+        bindtap="onPreviewImage"
+      />
+      <view wx:else class="att-file" data-index="{{index}}" bindtap="onOpenFile">
+        <view class="att-file-ext">{{item.ext}}</view>
+        <view class="att-file-name">{{item.name}}</view>
+        <view class="att-file-size">{{item.sizeText}}</view>
+      </view>
+      <view class="att-del" data-index="{{index}}" catchtap="onDelAttachment">×</view>
+    </view>
+  </view>
+</view>
+
+<view class="page-pad"></view>
+
+<view class="actions">
+  <view class="btn btn-ghost" bindtap="onSaveDraft">暂存草稿</view>
+  <view class="btn btn-primary" bindtap="onSubmit">提交消息</view>
+</view>

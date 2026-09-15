@@ -1,0 +1,69 @@
+<view class="page">
+  <view class="header">
+    <view class="nav-bar">
+      <view class="nav-back" bindtap="onBack">‹</view>
+      <view class="nav-title">客户信息</view>
+      <view class="nav-back nav-back--ghost"></view>
+    </view>
+    <view class="head">
+      <view class="head-name">{{profile.name}}</view>
+      <view class="head-tags">
+        <text class="head-tag" wx:for="{{profile.tags}}" wx:key="*this">{{item}}</text>
+      </view>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">交易信息<text class="card-unit">（单位：万元）</text></view>
+    <view class="kv" wx:for="{{tradingRows}}" wx:key="label">
+      <text class="kv-label">{{item.label}}</text>
+      <text class="kv-value">{{item.value}}</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">价格信息</view>
+    <view class="kv" wx:for="{{priceRows}}" wx:key="label">
+      <text class="kv-label">{{item.label}}</text>
+      <text class="kv-value">{{item.value}}</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">服务跟进记录</view>
+    <view class="svc-summary">线上服务 {{onlineCount}} 人次 · 线下服务 {{offlineCount}} 人次</view>
+    <view class="svc-row" wx:for="{{profile.serviceRecords}}" wx:key="dept">
+      <text class="svc-dept">{{item.dept}}</text>
+      <text class="svc-count">线上 {{item.online}} 人次 / 线下 {{item.offline}} 人次</text>
+    </view>
+  </view>
+
+  <view class="card">
+    <view class="card-title">历史需求</view>
+    <view class="tl">
+      <view class="tl-item" wx:for="{{profile.demands}}" wx:key="index">
+        <view class="tl-dot"></view>
+        <view class="tl-line" wx:if="{{index < profile.demands.length - 1}}"></view>
+        <view class="tl-body">
+          <view class="tl-head">
+            <text class="tl-date">{{item.date}}</text>
+            <text class="tl-type">{{item.type}}</text>
+          </view>
+          <view class="tl-owner">{{item.owner}} · 跟进人：{{item.staff}}</view>
+          <view class="tl-target" wx:if="{{item.target}}">目标：{{item.target}}</view>
+          <view class="tl-desc">{{item.desc}}</view>
+        </view>
+      </view>
+    </view>
+  </view>
+
+  <view class="card" wx:if="{{reports.length}}">
+    <view class="card-title">相关填报记录</view>
+    <view class="rp" wx:for="{{reports}}" wx:key="id" data-id="{{item.id}}" bindtap="onOpenReport">
+      <view class="rp-content">{{item.content}}</view>
+      <view class="rp-meta">{{item.reporter}} · {{item.timeText}}</view>
+    </view>
+  </view>
+
+  <view class="page-pad"></view>
+</view>

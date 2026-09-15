@@ -1,0 +1,14 @@
+<view class="tabbar">
+  <view class="tab {{selected === 0 ? 'active' : ''}}" data-index="0" bindtap="onTap">
+    <view class="icon icon-edit"></view>
+    <text class="tab-text">信息填报</text>
+  </view>
+  <view class="tab {{selected === 1 ? 'active' : ''}}" data-index="1" bindtap="onTap">
+    <view class="icon icon-mine"></view>
+    <text class="tab-text">我的填报</text>
+  </view>
+  <view class="tab {{selected === 2 ? 'active' : ''}}" data-index="2" bindtap="onTap">
+    <view class="icon icon-chart"></view>
+    <text class="tab-text">管理端</text>
+  </view>
+</view>
