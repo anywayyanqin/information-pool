@@ -76,8 +76,8 @@ const LINK_STATUS = {
 /* 解决确认状态（落实人 / 提出人通用） */
 const CONFIRM_STATE = { none: '未确认', resolved: '已解决', unresolved: '未解决' };
 
-/* 面向当前身份的主流程状态：待分发 / 待办 / 已办 / 完成 */
-const FLOW_STATUS = { dispatch: '待分发', todo: '待办', done: '已办', ended: '完成' };
+/* 面向当前身份的主流程状态：待分发 / 待办 / 已办 / 已解决 */
+const FLOW_STATUS = { dispatch: '待分发', todo: '待办', done: '已办', ended: '已解决' };
 
 /* 信息来源选项 */
 const SOURCE_OPTIONS = ['客户反馈', '同业交流', '行业会议', '监管与交易所', '网络媒体', '其他'];
