@@ -37,6 +37,12 @@ function userRootPool(u) {
   if (!u) return null;
   if (isDispatcher(u) || isAdmin(u)) return poolById('p_company');
   const allPools = (S && S.pools) ? S.pools : [];
+  // 部门负责人即使兼任上级池共同负责人，也应优先从自己的部门池进入管理
+  if (u.role === 'deptAdmin') {
+    const deptPool = allPools.find((p) => p.level === 2 && p.status !== 'DELETED' &&
+      ((p.ownerIds || []).includes(u.id) || (p.memberIds || []).includes(u.id)));
+    if (deptPool) return deptPool;
+  }
   // 查找我作为负责人且 level 最小的池
   const owned = allPools.filter((p) => p.status !== 'DELETED' && p.ownerIds && p.ownerIds.includes(u.id));
   if (owned.length) {
@@ -85,23 +91,26 @@ function isPoolVisible(u, poolId) {
   return visible.some((p) => p.id === poolId);
 }
 
-/* 权限：能否新建一级分管池（仅总池分发人 / 管理员） */
+/* 分管池和部门池由组织架构唯一确定，不允许手工新建 */
 function canCreateTopPool(u) {
-  return isDispatcher(u) || isAdmin(u);
+  return false;
 }
 
-/* 权限：能否在某父池下新建子池 */
+/* 权限：只允许在部门池下新建小组池 */
 function canCreateSubPool(u, parentPool) {
-  if (!parentPool || parentPool.level >= 3) return false;
+  if (!parentPool || parentPool.level !== 2) return false;
   if (isDispatcher(u) || isAdmin(u)) return true;
+  // 部门负责人：只要是该部门池负责人或成员，即可在本部门下建立小组池
+  if (u.role === 'deptAdmin' &&
+      (parentPool.ownerIds.includes(u.id) || parentPool.memberIds.includes(u.id))) return true;
   const root = userRootPool(u);
   if (!root) return false;
-  // 分管人：在自己分管枝内可新建部门/小组池
+  // 分管人：可在自己分管范围内的部门池下新建小组池
   if (isExec(u)) {
     const subtree = getPoolSubtree(root.id);
     return subtree.some((p) => p.id === parentPool.id);
   }
-  // 部门负责人：在自己部门池下可新建小组池
+  // 其他被配置为部门池负责人的身份：在自己的部门池下可新建小组池
   if (parentPool.id === root.id && parentPool.level === 2) return true;
   return false;
 }
@@ -240,6 +249,13 @@ function canConfirmHandler(u, m, link) {
 function canConfirmCreator(u, m) {
   if (m.createdBy !== u.id) return false;
   return m.status === 'confirming';
+}
+
+/* 发起人或总池分发人可在已有回复后直接将整条信息标记为已解决 */
+function canResolveMessage(u, m) {
+  if (!u || !m || m.status === 'closed' || m.status === 'cancelled') return false;
+  if (!repliesOf(m.id).length) return false;
+  return m.createdBy === u.id || isDispatcher(u) || isAdmin(u);
 }
 
 /* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */

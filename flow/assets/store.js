@@ -32,6 +32,9 @@ function loadState() {
       }
     });
   }
+  if (S && Array.isArray(S.messages)) {
+    S.messages.forEach((m) => { if (!Array.isArray(m.tags)) m.tags = []; });
+  }
 }
 function saveState() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 function resetState() {
@@ -104,6 +107,19 @@ function addLog(messageId, actorId, action, extra) {
     id: 'lg_' + Math.random().toString(36).slice(2, 9),
     messageId, at: Date.now(), actorId: actorId || null, action
   }, extra || {}));
+}
+
+/* ---------- 动作：消息业务标签 ---------- */
+function toggleMessageTag(msgId, tag) {
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  m.tags = Array.isArray(m.tags) ? m.tags : [];
+  const i = m.tags.indexOf(tag);
+  if (i > -1) m.tags.splice(i, 1); else m.tags.push(tag);
+  m.updatedAt = Date.now();
+  addLog(m.id, curUser().id, 'tagged', { note: (i > -1 ? '取消标签：' : '添加标签：') + tag });
+  saveState();
+  return { ok: true, active: i === -1 };
 }
 
 /* ---------- 状态机 ----------
@@ -396,6 +412,29 @@ function setCreatorConfirm(msgId, state) {
   return { ok: true };
 }
 
+/* ---------- 动作：发起人/分发人直接标记整条信息已解决 ---------- */
+function resolveMessage(msgId) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (!canResolveMessage(me, m)) return { ok: false, msg: '已有回复后，发起人或分发人才可标记为已解决' };
+  const now = Date.now();
+  linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
+    link.status = 'resolved';
+    link.resolvedAt = now;
+    link.handlerConfirm = { state: 'resolved', by: me.id, at: now, note: '由' + (m.createdBy === me.id ? '发起人' : '分发人') + '标记已解决' };
+  });
+  m.creatorConfirm = { state: 'resolved', by: me.id, at: now };
+  m.status = 'closed';
+  m.closedAt = now;
+  m.updatedAt = now;
+  addLog(m.id, me.id, 'closed', { note: (m.createdBy === me.id ? '发起人' : '分发人') + '标记信息为已解决' });
+  const participants = [m.createdBy].concat(linksOf(m.id).map((link) => link.dispatchedBy), linksOf(m.id).map((link) => handlerOfLink(link)));
+  sendWeComNotification(participants, m.no + ' 已由' + (m.createdBy === me.id ? '发起人' : '分发人') + '标记为已解决', m.id);
+  saveState();
+  return { ok: true };
+}
+
 /* ---------- 动作：取消消息（提出人） ---------- */
 function cancelMessage(msgId) {
   const me = curUser();
@@ -524,6 +563,9 @@ function getPoolRecentLogs(poolId, limit = 5) {
 function createPool(data) {
   const me = curUser();
   const parent = poolById(data.parentId);
+  if (!parent || parent.level !== 2 || !canCreateSubPool(me, parent)) {
+    return { ok: false, msg: '只能在部门池下新建小组池' };
+  }
   const level = parent ? (parent.level != null ? parent.level + 1 : 2) : 1;
   const poolType = level === 1 ? 'exec' : (level === 2 ? 'dept' : 'group');
   
@@ -629,6 +671,18 @@ function addPoolMember(poolId, userId) {
     saveState();
   }
   return { ok: true };
+}
+
+function addPoolMembers(poolId, userIds) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在', count: 0 };
+  const before = p.memberIds.length;
+  [...new Set((userIds || []).filter(Boolean))].forEach((userId) => {
+    if (!p.memberIds.includes(userId)) p.memberIds.push(userId);
+  });
+  const count = p.memberIds.length - before;
+  if (count) saveState();
+  return { ok: true, count };
 }
 
 function removePoolMember(poolId, userId) {

@@ -5,7 +5,6 @@
 const ROUTES = [
   { path: '#/workbench', name: '工作台' },
   { path: '#/new', name: '我要填报' },
-  { path: '#/infopool', name: '信息池' },
   { path: '#/pools', name: '池管理' }
 ];
 
@@ -44,14 +43,17 @@ window.resetAll = () => {
 };
 
 function render() {
-  renderTopbar();
   const hash = location.hash || '#/workbench';
+  if (hash.indexOf('#/infopool') === 0) {
+    location.replace('#/workbench');
+    return;
+  }
+  renderTopbar();
   const app = document.getElementById('app');
   let html;
   if (hash.indexOf('#/message/') === 0) html = renderDetail(hash.slice('#/message/'.length));
   else if (hash.indexOf('#/customer/') === 0) html = renderCustomer(decodeURIComponent(hash.slice('#/customer/'.length)));
   else if (hash === '#/new') html = renderNew();
-  else if (hash.indexOf('#/infopool') === 0) html = renderInfoPool();
   else if (hash.indexOf('#/pools') === 0) html = renderPools();
   else html = renderWorkbench();
   app.innerHTML = html;
