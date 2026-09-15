@@ -5,7 +5,8 @@
 const ROUTES = [
   { path: '#/workbench', name: '工作台' },
   { path: '#/new', name: '我要填报' },
-  { path: '#/pools', name: '池管理', show: () => isDispatcher(curUser()) }
+  { path: '#/infopool', name: '信息池' },
+  { path: '#/pools', name: '池管理' }
 ];
 
 function renderTopbar() {
@@ -25,11 +26,15 @@ function renderTopbar() {
     '</div>';
 }
 
-window.changeIdentity = (userId) => {
+function changeIdentity(userId) {
   setIdentity(userId);
+  if (typeof pmOnIdentityChange === 'function') {
+    pmOnIdentityChange();
+  }
   toast('已切换身份：' + userName(userId) + '（' + ROLES[curUser().role] + '）');
   render();
-};
+}
+window.changeIdentity = changeIdentity;
 window.resetAll = () => {
   if (!confirm('将清空本地全部演示数据并恢复种子数据，确定重置吗？')) return;
   resetState();
@@ -46,10 +51,12 @@ function render() {
   if (hash.indexOf('#/message/') === 0) html = renderDetail(hash.slice('#/message/'.length));
   else if (hash.indexOf('#/customer/') === 0) html = renderCustomer(decodeURIComponent(hash.slice('#/customer/'.length)));
   else if (hash === '#/new') html = renderNew();
-  else if (hash === '#/pools') html = renderPools();
+  else if (hash.indexOf('#/infopool') === 0) html = renderInfoPool();
+  else if (hash.indexOf('#/pools') === 0) html = renderPools();
   else html = renderWorkbench();
   app.innerHTML = html;
   if (hash === '#/new') afterRenderNew();
+  if (hash.indexOf('#/pools') === 0 && window.afterRenderPools) afterRenderPools();
 }
 
 window.addEventListener('hashchange', render);

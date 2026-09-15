@@ -5,14 +5,16 @@
 
 const IDENTITY_KEY = 'flow_identity';
 
-/* 可切换身份（仅这 4 个，其余用户不出现在身份下拉） */
+/* 可切换身份（支持总池分发人、分管人、部门负责人、组负责人、普通员工） */
 const IDENTITY_CHOICES = [
-  { id: 'u_zs',  label: '普通员工（张三）' },
-  { id: 'u_wjx', label: '分管池负责人（王冀湘）' },
   { id: 'u_qy',  label: '总池分发人（李倩影）' },
-  { id: 'u_cl',  label: '部门池人员（陈立）' }
+  { id: 'u_wjx', label: '分管人（王冀湘·研究所）' },
+  { id: 'u_wyx', label: '分管人（闻勇翔·机构业务）' },
+  { id: 'u_zm',  label: '部门负责人（宏观部·周明）' },
+  { id: 'u_ls',  label: '组负责人（华东组·李四）' },
+  { id: 'u_zs',  label: '普通员工（张三）' }
 ];
-const DEFAULT_IDENTITY = 'u_zs';
+const DEFAULT_IDENTITY = 'u_qy';
 
 function curUser() {
   const u = USERS.find((x) => x.id === localStorage.getItem(IDENTITY_KEY));
@@ -21,9 +23,133 @@ function curUser() {
 }
 function setIdentity(userId) { localStorage.setItem(IDENTITY_KEY, userId); }
 
-function isAdmin(u) { return u.role === 'admin'; }
-function isDispatcher(u) { return u.role === 'dispatcher'; }
-function isExec(u) { return u.role === 'exec'; }
+function isAdmin(u) { return u && u.role === 'admin'; }
+function isDispatcher(u) { return u && (u.role === 'dispatcher' || u.id === 'u_qy'); }
+function isExec(u) { return u && (u.role === 'exec' || u.id === 'u_wjx' || u.id === 'u_wyx'); }
+
+/* 当前身份在池体系中的根节点池：
+ * 总池分发人 -> 公司总池（全树）
+ * 分管人 -> 研究所分管池 / 机构业务分管池（仅该枝）
+ * 部门负责人 -> 宏观研究部池
+ * 组负责人 -> 华东组池（叶子节点）
+ * 普通员工 -> null（无管理池） */
+function userRootPool(u) {
+  if (!u) return null;
+  if (isDispatcher(u) || isAdmin(u)) return poolById('p_company');
+  const allPools = (S && S.pools) ? S.pools : [];
+  // 查找我作为负责人且 level 最小的池
+  const owned = allPools.filter((p) => p.status !== 'DELETED' && p.ownerIds && p.ownerIds.includes(u.id));
+  if (owned.length) {
+    owned.sort((a, b) => (a.level != null ? a.level : 99) - (b.level != null ? b.level : 99));
+    return owned[0];
+  }
+  // 回退：查找我作为成员且 level 最小的池
+  const member = allPools.filter((p) => p.status !== 'DELETED' && p.memberIds && p.memberIds.includes(u.id));
+  if (member.length) {
+    member.sort((a, b) => (a.level != null ? a.level : 99) - (b.level != null ? b.level : 99));
+    return member[0];
+  }
+  return null;
+}
+
+function canAccessPoolManage(u) {
+  return !!userRootPool(u);
+}
+
+/* 以 rootPool 为顶点的下级子树（包含 rootPool 自身，只向下，向上不可见） */
+function getPoolSubtree(rootPoolId) {
+  if (!rootPoolId) return [];
+  const result = [];
+  const queue = [rootPoolId];
+  while (queue.length) {
+    const curId = queue.shift();
+    const p = poolById(curId);
+    if (p && p.status !== 'DELETED') {
+      result.push(p);
+      const children = (S && S.pools ? S.pools : []).filter((cp) => cp.parentId === curId && cp.status !== 'DELETED');
+      children.forEach((cp) => queue.push(cp.id));
+    }
+  }
+  return result;
+}
+
+/* 当前身份可见的池子树列表 */
+function visiblePoolSubtree(u) {
+  const root = userRootPool(u);
+  if (!root) return [];
+  return getPoolSubtree(root.id);
+}
+
+function isPoolVisible(u, poolId) {
+  const visible = visiblePoolSubtree(u);
+  return visible.some((p) => p.id === poolId);
+}
+
+/* 权限：能否新建一级分管池（仅总池分发人 / 管理员） */
+function canCreateTopPool(u) {
+  return isDispatcher(u) || isAdmin(u);
+}
+
+/* 权限：能否在某父池下新建子池 */
+function canCreateSubPool(u, parentPool) {
+  if (!parentPool || parentPool.level >= 3) return false;
+  if (isDispatcher(u) || isAdmin(u)) return true;
+  const root = userRootPool(u);
+  if (!root) return false;
+  // 分管人：在自己分管枝内可新建部门/小组池
+  if (isExec(u)) {
+    const subtree = getPoolSubtree(root.id);
+    return subtree.some((p) => p.id === parentPool.id);
+  }
+  // 部门负责人：在自己部门池下可新建小组池
+  if (parentPool.id === root.id && parentPool.level === 2) return true;
+  return false;
+}
+
+/* 权限：能否设置某池的负责人（支持多负责人管理与协同设置） */
+function canSetPoolOwner(u, pool) {
+  if (!pool) return false;
+  if (pool.level === 0 && !isDispatcher(u) && !isAdmin(u)) return false;
+  if (isDispatcher(u) || isAdmin(u)) return true;
+  const root = userRootPool(u);
+  if (!root) return false;
+  // 分管高管、部门负责人、小组负责人均可管理本池及管辖子树的负责人
+  const subtree = getPoolSubtree(root.id);
+  return subtree.some((p) => p.id === pool.id);
+}
+
+/* 权限：能否管理池成员 */
+function canManagePoolMembers(u, pool) {
+  if (!pool) return false;
+  if (isDispatcher(u) || isAdmin(u)) return true;
+  const root = userRootPool(u);
+  if (!root) return false;
+  const subtree = getPoolSubtree(root.id);
+  return subtree.some((p) => p.id === pool.id);
+}
+
+/* 权限：能否停用某池（仅总池分发人，且必须是子级池） */
+function canDisablePool(u, pool) {
+  if (!pool || pool.level === 0) return false;
+  return isDispatcher(u) || isAdmin(u);
+}
+
+/* 权限：能否编辑池设置（名称/时限/直投开关等） */
+function canEditPoolSettings(u, pool) {
+  if (!pool) return false;
+  if (isDispatcher(u) || isAdmin(u)) return true;
+  const root = userRootPool(u);
+  if (!root) return false;
+  const subtree = getPoolSubtree(root.id);
+  return subtree.some((p) => p.id === pool.id);
+}
+
+/* 权限：能否催办或转派消息 */
+function canUrgeOrTransfer(u) {
+  if (isDispatcher(u) || isExec(u) || isAdmin(u)) return true;
+  const root = userRootPool(u);
+  return !!root;
+}
 
 /* 我负责或所属的池 id 列表 */
 function myPoolIds(u) {

@@ -1,0 +1,6 @@
+{
+  "name": "信息池",
+  "description": "带投递、分发、流转、双确认闭环能力的信息池原型与演示应用",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
