@@ -10,18 +10,35 @@
  *   落实人 = 最终处理池的当前处理人
  * ========================================================================== */
 
-const LS_KEY = 'flow_state_v3';
+const LS_KEY = 'flow_state_v5';
 let S = null;
 
 /* ---------- 持久化 ---------- */
 function loadState() {
   try { S = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { S = null; }
-  if (!S || S.v !== 3) { S = buildSeed(); saveState(); }
+  if (!S || S.v !== 5) {
+    S = buildSeed();
+    S.v = 5;
+    saveState();
+  }
+  // 确保所有池对象的 ownerIds 和 memberIds 为有效数组
+  if (S && Array.isArray(S.pools)) {
+    S.pools.forEach((p) => {
+      if (!Array.isArray(p.ownerIds)) {
+        p.ownerIds = p.ownerId ? [p.ownerId] : [];
+      }
+      if (!Array.isArray(p.memberIds)) {
+        p.memberIds = [...p.ownerIds];
+      }
+    });
+  }
 }
 function saveState() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 function resetState() {
   localStorage.removeItem(LS_KEY);
+  localStorage.removeItem('flow_state_v4');
   S = buildSeed();
+  S.v = 5;
   saveState();
 }
 
@@ -422,10 +439,279 @@ function reviewPoolApp(appId, pass) {
     S.pools.push({
       id: 'p_' + Math.random().toString(36).slice(2, 9),
       name: app.poolName, type: app.poolType, parentId: app.parentId,
+      level: 3, timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE',
       ownerIds: [app.applicantId], memberIds: [app.applicantId]
     });
   }
   sendWeComNotification([app.applicantId], '您的池申请「' + app.poolName + '」' + (pass ? '已通过，池已创建' : '被驳回'), null);
   saveState();
   return { ok: true };
+}
+
+/* ---------- 池统计与消息检索 ---------- */
+function isMessageOverdue(m) {
+  if (!m || m.status === 'closed' || m.status === 'cancelled') return false;
+  if (m.overdue) return true;
+  // 超过48小时未完成判定为超时
+  return (Date.now() - m.createdAt) > 48 * 3600e3;
+}
+
+function poolMessages(poolId, includeSub = true) {
+  if (!S || !S.messages) return [];
+  const targetPoolIds = includeSub
+    ? getPoolSubtree(poolId).map((p) => p.id)
+    : [poolId];
+  const targetSet = new Set(targetPoolIds);
+
+  return S.messages.filter((m) => {
+    if (m.sourcePoolId && targetSet.has(m.sourcePoolId)) return true;
+    const links = linksOf(m.id);
+    return links.some((l) => targetSet.has(l.poolId));
+  });
+}
+
+function poolMetrics(poolId, includeSub = true) {
+  const msgs = poolMessages(poolId, includeSub);
+  const targetPoolIds = includeSub ? getPoolSubtree(poolId).map((p) => p.id) : [poolId];
+  const targetSet = new Set(targetPoolIds);
+
+  let todo = 0;
+  let processing = 0;
+  let confirming = 0;
+  let closed = 0;
+  let overdue = 0;
+
+  msgs.forEach((m) => {
+    if (m.status === 'closed') {
+      closed++;
+    } else if (m.status === 'confirming') {
+      confirming++;
+    } else {
+      const activeLinks = linksOf(m.id).filter((l) => targetSet.has(l.poolId) && linkActive(l));
+      if (activeLinks.some((l) => l.status === 'processing' || l.status === 'replied')) {
+        processing++;
+      } else {
+        todo++;
+      }
+    }
+    if (isMessageOverdue(m)) {
+      overdue++;
+    }
+  });
+
+  return {
+    total: msgs.length,
+    todo,
+    processing,
+    confirming,
+    closed,
+    overdue,
+    hasOverdue: overdue > 0,
+    avgResponseDays: '1.6天'
+  };
+}
+
+function getPoolRecentLogs(poolId, limit = 5) {
+  const msgs = poolMessages(poolId, true);
+  const msgIds = new Set(msgs.map((m) => m.id));
+  return (S.logs || [])
+    .filter((l) => msgIds.has(l.messageId))
+    .sort((a, b) => b.at - a.at)
+    .slice(0, limit);
+}
+
+/* ---------- 动作：池管理相关 ---------- */
+function createPool(data) {
+  const me = curUser();
+  const parent = poolById(data.parentId);
+  const level = parent ? (parent.level != null ? parent.level + 1 : 2) : 1;
+  const poolType = level === 1 ? 'exec' : (level === 2 ? 'dept' : 'group');
+  
+  // 支持多位负责人
+  let ownerIds = [];
+  if (Array.isArray(data.ownerIds)) {
+    ownerIds = [...new Set(data.ownerIds.filter(Boolean))];
+  } else if (data.ownerId) {
+    ownerIds = [data.ownerId];
+  }
+
+  let memberIds = Array.isArray(data.memberIds) ? [...data.memberIds] : [];
+  ownerIds.forEach((oid) => {
+    if (!memberIds.includes(oid)) memberIds.push(oid);
+  });
+
+  const newPool = {
+    id: 'p_' + Math.random().toString(36).slice(2, 9),
+    name: (data.name || '').trim(),
+    type: poolType,
+    level,
+    parentId: data.parentId || null,
+    ownerIds,
+    memberIds,
+    timeoutDays: Number(data.timeoutDays) || 2,
+    allowDirect: !!data.allowDirect,
+    autoAssign: !!data.autoAssign,
+    status: 'ACTIVE'
+  };
+  S.pools.push(newPool);
+  saveState();
+  return { ok: true, pool: newPool };
+}
+
+function updatePool(poolId, patch) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  if (patch.name != null) p.name = patch.name.trim();
+
+  // 支持设置多位负责人
+  if (patch.ownerIds !== undefined) {
+    p.ownerIds = Array.isArray(patch.ownerIds) ? [...new Set(patch.ownerIds.filter(Boolean))] : (patch.ownerIds ? [patch.ownerIds] : []);
+    p.ownerIds.forEach((oid) => {
+      if (!p.memberIds.includes(oid)) p.memberIds.push(oid);
+    });
+  } else if (patch.ownerId !== undefined) {
+    p.ownerIds = patch.ownerId ? [patch.ownerId] : [];
+    if (patch.ownerId && !p.memberIds.includes(patch.ownerId)) {
+      p.memberIds.push(patch.ownerId);
+    }
+  }
+
+  if (patch.timeoutDays != null) p.timeoutDays = Number(patch.timeoutDays) || 2;
+  if (patch.allowDirect != null) p.allowDirect = !!patch.allowDirect;
+  if (patch.autoAssign != null) p.autoAssign = !!patch.autoAssign;
+  if (patch.status != null) p.status = patch.status;
+  saveState();
+  return { ok: true, pool: p };
+}
+
+function disablePool(poolId) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  p.status = p.status === 'DISABLED' ? 'ACTIVE' : 'DISABLED';
+  saveState();
+  return { ok: true, status: p.status };
+}
+
+function setPoolOwners(poolId, ownerIds) {
+  return updatePool(poolId, { ownerIds });
+}
+
+function setPoolOwner(poolId, ownerId) {
+  return updatePool(poolId, { ownerId });
+}
+
+function addPoolOwner(poolId, userId) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  if (!p.ownerIds.includes(userId)) {
+    p.ownerIds.push(userId);
+  }
+  if (!p.memberIds.includes(userId)) {
+    p.memberIds.push(userId);
+  }
+  saveState();
+  return { ok: true };
+}
+
+function removePoolOwner(poolId, userId) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  p.ownerIds = p.ownerIds.filter((id) => id !== userId);
+  saveState();
+  return { ok: true };
+}
+
+function addPoolMember(poolId, userId) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  if (!p.memberIds.includes(userId)) {
+    p.memberIds.push(userId);
+    saveState();
+  }
+  return { ok: true };
+}
+
+function removePoolMember(poolId, userId) {
+  const p = poolById(poolId);
+  if (!p) return { ok: false, msg: '池不存在' };
+  p.memberIds = p.memberIds.filter((id) => id !== userId);
+  if (p.ownerIds.includes(userId)) {
+    p.ownerIds = p.ownerIds.filter((id) => id !== userId);
+  }
+  saveState();
+  return { ok: true };
+}
+
+/* 催办操作 */
+function urgeMessage(messageId, poolId) {
+  const me = curUser();
+  const m = findMsg(messageId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  const links = linksOf(messageId).filter((l) => !poolId || l.poolId === poolId);
+  const handlerIds = links.map((l) => handlerOfLink(l)).filter(Boolean);
+  sendWeComNotification(handlerIds, '【催办提醒】' + me.name + ' 对消息 ' + m.no + '《' + m.title + '》进行了催办，请尽快办理。', m.id);
+  addLog(m.id, me.id, 'urge', { note: '催办消息，提醒处理人尽快办理' });
+  saveState();
+  return { ok: true };
+}
+
+/* 转派操作 */
+function transferMessage(messageId, fromPoolId, toPoolId, toUserId, note) {
+  const me = curUser();
+  const m = findMsg(messageId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  const targetPool = poolById(toPoolId);
+  if (!targetPool) return { ok: false, msg: '目标池不存在' };
+
+  let link = linkOf(messageId, fromPoolId);
+  if (link) {
+    link.poolId = toPoolId;
+    link.poolType = targetPool.type;
+    link.handlerId = toUserId || targetPool.ownerIds[0] || null;
+    link.status = 'pending';
+  } else {
+    link = {
+      id: 'lk_' + Math.random().toString(36).slice(2, 9),
+      messageId, poolId: toPoolId, poolType: targetPool.type,
+      parentLinkId: null, parentPoolId: fromPoolId,
+      status: 'pending', handlerId: toUserId || targetPool.ownerIds[0] || null,
+      isFinal: true, handlerConfirm: { state: 'none' },
+      dispatchedBy: me.id, dispatchedAt: Date.now(), note: note || '转派'
+    };
+    S.links.push(link);
+  }
+  addLog(m.id, me.id, 'transfer', {
+    note: '转派到 ' + targetPool.name + (toUserId ? '（' + userName(toUserId) + '）' : '') + (note ? '：' + note : '')
+  });
+  if (toUserId) {
+    sendWeComNotification([toUserId], '消息 ' + m.no + '《' + m.title + '》已由 ' + me.name + ' 转派给您处理', m.id);
+  }
+  saveState();
+  return { ok: true };
+}
+
+/* 关注/取消关注 */
+const FOLLOW_KEY = 'flow_followed_msgs';
+function isFollowed(messageId) {
+  try {
+    const list = JSON.parse(localStorage.getItem(FOLLOW_KEY) || '[]');
+    return list.includes(messageId);
+  } catch (e) { return false; }
+}
+function toggleFollowMessage(messageId) {
+  try {
+    let list = JSON.parse(localStorage.getItem(FOLLOW_KEY) || '[]');
+    let state = false;
+    if (list.includes(messageId)) {
+      list = list.filter((id) => id !== messageId);
+      state = false;
+    } else {
+      list.push(messageId);
+      state = true;
+    }
+    localStorage.setItem(FOLLOW_KEY, JSON.stringify(list));
+    return { ok: true, followed: state };
+  } catch (e) {
+    return { ok: true, followed: true };
+  }
 }

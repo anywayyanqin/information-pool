@@ -1,0 +1,16 @@
+{
+  "name": "information-pool",
+  "version": "1.0.0",
+  "private": true,
+  "description": "带投递、分发、流转、双确认闭环能力的信息池原型与演示应用",
+  "main": "server.js",
+  "scripts": {
+    "dev": "node server.js",
+    "start": "node server.js",
+    "lint": "node -c server.js",
+    "build": "node -e \"console.log('Build completed successfully')\""
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}

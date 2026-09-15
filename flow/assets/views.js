@@ -40,11 +40,12 @@ function flowBadge(m, me) {
 function attsHtml(atts) {
   if (!atts || !atts.length) return '';
   return '<div class="att-chips">' + atts.map((a) =>
-    '<span class="att-chip">' + (a.type === 'voice' ? '🎤 ' : a.type === 'image' ? '🖼 ' : '') + esc(a.name) +
+    '<span class="att-chip">' + (a.type === 'voice' ? '[语音] ' : a.type === 'image' ? '[图片] ' : '') + esc(a.name) +
     (a.size ? '（' + fmtSize(a.size) + '）' : '') + '</span>').join('') + '</div>';
 }
 function toast(msg) {
   const el = document.getElementById('toast');
+  if (!el || !el.classList) return;
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toast._t);
@@ -183,6 +184,187 @@ function renderWorkbench() {
       '<select onchange="setWbStatus(this.value)"><option value="">全部状态</option>' + statusOpts + '</select>' +
     '</div>' +
     '<div id="msgList">' + wbListHtml() + '</div>' +
+  '</div>';
+}
+
+/* ==========================================================================
+ * 1.5. 信息池（全景信息中心与全池记录浏览）
+ * ========================================================================== */
+let ipTab = 'all';     /* all, p_company, processing, confirming, closed, overdue */
+let ipPool = 'all';    /* all or specific poolId */
+let ipSource = 'all';  /* all or specific source */
+let ipKw = '';         /* 搜索关键词 */
+let ipSort = 'updated';/* updated, created */
+
+function ipTabs() {
+  return [
+    { key: 'all', name: '全部信息' },
+    { key: 'p_company', name: '待总池分发' },
+    { key: 'processing', name: '在办流转中' },
+    { key: 'confirming', name: '待双确认' },
+    { key: 'closed', name: '已办结' },
+    { key: 'overdue', name: '超时预警' }
+  ];
+}
+
+function ipList() {
+  let list = visibleMessages();
+
+  if (ipTab === 'p_company') {
+    list = list.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company');
+  } else if (ipTab === 'processing') {
+    list = list.filter((m) => m.status === 'processing' || m.status === 'p_group' || m.status === 'p_dept' || m.status === 'p_exec');
+  } else if (ipTab === 'confirming') {
+    list = list.filter((m) => m.status === 'confirming');
+  } else if (ipTab === 'closed') {
+    list = list.filter((m) => m.status === 'closed');
+  } else if (ipTab === 'overdue') {
+    list = list.filter((m) => isMessageOverdue(m));
+  }
+
+  if (ipPool !== 'all') {
+    list = list.filter((m) => msgInPool(m, ipPool));
+  }
+
+  if (ipSource !== 'all') {
+    list = list.filter((m) => (m.sources && m.sources.includes(ipSource)) || m.sourceOther === ipSource);
+  }
+
+  if (ipKw) {
+    const kw = ipKw.trim().toLowerCase();
+    list = list.filter((m) =>
+      (m.no && m.no.toLowerCase().includes(kw)) ||
+      (m.title && m.title.toLowerCase().includes(kw)) ||
+      (m.customerName && m.customerName.toLowerCase().includes(kw)) ||
+      (m.content && m.content.toLowerCase().includes(kw))
+    );
+  }
+
+  if (ipSort === 'created') {
+    list.sort((a, b) => b.createdAt - a.createdAt);
+  } else {
+    list.sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  return list;
+}
+
+window.setIpTab = (t) => { ipTab = t; render(); };
+window.setIpPool = (p) => { ipPool = p; render(); };
+window.setIpSource = (s) => { ipSource = s; render(); };
+window.setIpSort = (s) => { ipSort = s; render(); };
+window.setIpKw = (k) => {
+  ipKw = k;
+  const el = document.getElementById('ipListContainer');
+  if (el) el.innerHTML = ipListHtml();
+};
+
+function ipListHtml() {
+  const list = ipList();
+  if (!list.length) return empty('信息池中暂无符合条件的数据');
+
+  return list.map((m) => {
+    const activeLinks = linksOf(m.id).filter(linkActive);
+    const poolNames = activeLinks.map((l) => poolName(l.poolId)).filter(Boolean);
+    const poolTag = poolNames.length ? poolNames.join('、') : (m.sourcePoolId === 'p_company' && m.status === 'p_company' ? '公司总池（待分发）' : poolName(m.sourcePoolId));
+
+    const handlers = [...new Set(activeLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+    const isOverdue = isMessageOverdue(m);
+    const overdueDays = m.overdueDays || (isOverdue ? 1 : 0);
+
+    const src = (m.sources && m.sources.length ? m.sources.join('、') : '') +
+      (m.sourceOther ? (m.sources && m.sources.length ? '、' : '') + m.sourceOther : '');
+
+    return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
+      '<div class="msg-row-top">' +
+        '<span class="msg-no">' + esc(m.no) + '</span>' +
+        badge(m.status) +
+        (isOverdue ? '<span class="badge b-unresolved">超时 ' + overdueDays + ' 天</span>' : '') +
+        '<span class="badge b-p_exec" style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" title="当前归属池：' + esc(poolTag) + '">归属池：' + esc(poolTag) + '</span>' +
+        (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handlers || '—') + '</span>') +
+      '</div>' +
+      '<div class="msg-title" style="font-size:14px; font-weight:600; color:#1f2430; margin:2px 0;">' + esc(m.title) + '</div>' +
+      (src ? '<div class="msg-info"><span class="msg-info-label">信息来源：</span>' + esc(src) + '</div>' : '') +
+      (m.customerName ? '<div class="msg-info"><span class="msg-info-label">关联客户：</span><b style="color:#2f6bff;">' + esc(m.customerName) + '</b></div>' : '') +
+      '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
+      '<div class="msg-foot">' +
+        '<span class="msg-meta">发起人：' + esc(userName(m.createdBy)) + '</span>' +
+        '<span class="msg-time">更新于 ' + fmtTime(m.updatedAt) + '</span>' +
+      '</div>' +
+    '</div>';
+  }).join('');
+}
+
+function renderInfoPool() {
+  const me = curUser();
+  const allMsgs = visibleMessages();
+  const totalCount = allMsgs.length;
+  const dispatchCount = allMsgs.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company').length;
+  const processingCount = allMsgs.filter((m) => m.status === 'processing' || m.status === 'p_group' || m.status === 'p_dept' || m.status === 'p_exec').length;
+  const confirmingCount = allMsgs.filter((m) => m.status === 'confirming').length;
+  const closedCount = allMsgs.filter((m) => m.status === 'closed').length;
+  const overdueCount = allMsgs.filter(isMessageOverdue).length;
+
+  const poolOpts = '<option value="all">全部池</option>' + S.pools.map((p) =>
+    '<option value="' + p.id + '"' + (ipPool === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
+
+  const sourceOpts = '<option value="all">全部来源</option>' + SOURCE_OPTIONS.map((s) =>
+    '<option value="' + esc(s) + '"' + (ipSource === s ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
+
+  return '<div class="wb-main">' +
+    '<div class="card" style="margin-bottom:14px; padding:18px 20px;">' +
+      '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">' +
+        '<div>' +
+          '<div class="card-title" style="margin-bottom:4px; font-size:17px; display:flex; align-items:center; gap:8px;">' +
+            '信息池 · 全景信息中心' +
+            '<span class="badge b-p_exec">当前身份：' + esc(me.name) + '</span>' +
+          '</div>' +
+          '<div style="font-size:12px; color:#5b6579;">' +
+            '集中汇聚全公司各级池（公司总池 / 分管池 / 部门池 / 小组池）流转信息，实时掌握跨组织协同动态' +
+          '</div>' +
+        '</div>' +
+        '<div style="display:flex; gap:8px;">' +
+          '<a href="#/new" class="btn btn-sm btn-primary">+ 我要填报</a>' +
+          (canAccessPoolManage(me) ? '<a href="#/pools" class="btn btn-sm btn-ghost">池架构管理 →</a>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid #f0f2f7;">' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:#1f2430;">' + totalCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">池内总信息量</div>' +
+        '</div>' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:#fa8c16;">' + dispatchCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">待总池分发</div>' +
+        '</div>' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:#2f6bff;">' + processingCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">各级池在办</div>' +
+        '</div>' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:#d48806;">' + confirmingCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">待双确认</div>' +
+        '</div>' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:#1faa5c;">' + closedCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">已办结归档</div>' +
+        '</div>' +
+        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
+          '<div style="font-size:18px; font-weight:700; color:' + (overdueCount > 0 ? '#f0524d' : '#9aa3b5') + ';">' + overdueCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
+          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">超时未结预警</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+    '<div class="tabs">' + ipTabs().map((t) =>
+      '<div class="tab' + (ipTab === t.key ? ' on' : '') + '" onclick="setIpTab(\'' + t.key + '\')">' + t.name + '</div>').join('') +
+    '</div>' +
+    '<div class="filters">' +
+      '<input placeholder="搜索编号 / 标题 / 客户 / 内容..." value="' + esc(ipKw) + '" oninput="setIpKw(this.value)">' +
+      '<select onchange="setIpPool(this.value)">' + poolOpts + '</select>' +
+      '<select onchange="setIpSource(this.value)">' + sourceOpts + '</select>' +
+      '<select onchange="setIpSort(this.value)"><option value="updated"' + (ipSort === 'updated' ? ' selected' : '') + '>按最近更新</option><option value="created"' + (ipSort === 'created' ? ' selected' : '') + '>按创建时间</option></select>' +
+    '</div>' +
+    '<div id="ipListContainer">' + ipListHtml() + '</div>' +
   '</div>';
 }
 
@@ -643,8 +825,8 @@ function actionBarHtml(me, m) {
   const comment = '<div class="bar-comment">' +
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>';
-  const likeBtn = '<button class="bar-ic' + (liked ? ' on' : '') + '" title="点赞" onclick="toggleMsgLikeUI(\'' + m.id + '\')">👍<i>' + (m.likeCount || 0) + '</i></button>';
-  const cmtBtn = '<button class="bar-ic" title="评论" onclick="openCommentPanel(\'' + m.id + '\')">💬<i>' + cmtCount + '</i></button>';
+  const likeBtn = '<button class="bar-ic' + (liked ? ' on' : '') + '" title="点赞" onclick="toggleMsgLikeUI(\'' + m.id + '\')"><span class="bar-text">' + (liked ? '已赞' : '赞') + '</span><i>' + (m.likeCount || 0) + '</i></button>';
+  const cmtBtn = '<button class="bar-ic" title="评论" onclick="openCommentPanel(\'' + m.id + '\')"><span class="bar-text">回复</span><i>' + cmtCount + '</i></button>';
   const acts = [];
   if (canConfirmCreator(me, m)) {
     acts.push('<button class="btn btn-sm" onclick="creatorConfirm(\'' + m.id + '\',\'resolved\')">确认已解决</button>');
@@ -684,7 +866,7 @@ function logText(l) {
 
 /* ---------- 评论流卡片：一条评论 + 其所有回复放在同一张卡片内 ----------
  * 一级评论作为卡片主体，嵌套回复紧跟在卡片内部的嵌套区域；
- * 每条回复（含主体）都有 👍 / 💬 按钮；落实人确认按钮在落实人回复上直接展示。 */
+ * 每条回复（含主体）都有赞 / 回复按钮；落实人确认按钮在落实人回复上直接展示。 */
 let replyBoxFor = null;
 
 function singleReplyRowHtml(me, m, r) {
@@ -711,8 +893,8 @@ function singleReplyRowHtml(me, m, r) {
       '<div class="reply-content">' + esc(r.content) + '</div>' +
       attsHtml(r.attachments) +
       '<div class="cmt-foot">' +
-        '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">👍 ' + (r.likeCount || 0) + '</button>' +
-        '<button class="like-btn" onclick="toggleCommentBox(\'' + m.id + '\',\'' + r.id + '\')">💬' + (childCount ? ' ' + childCount : '') + '</button>' +
+        '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">' + (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0) + '</button>' +
+        '<button class="like-btn" onclick="toggleCommentBox(\'' + m.id + '\',\'' + r.id + '\')">回复' + (childCount ? ' ' + childCount : '') + '</button>' +
         (canOp ?
           '<button class="btn btn-sm' + (hc.state === 'resolved' ? '' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'resolved\')">已解决</button>' +
           '<button class="btn btn-sm' + (hc.state === 'unresolved' ? ' btn-danger' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'unresolved\')">未解决</button>' : '') +
@@ -816,7 +998,7 @@ function renderCommentPanel() {
   if (!cmtPanel) return;
   const m = findMsg(cmtPanel.msgId);
   const chips = cmtPanel.atts.map((a, i) =>
-    '<span class="att-chip">' + (a.type === 'voice' ? '🎤 ' : a.type === 'image' ? '🖼 ' : '') + esc(a.name) +
+    '<span class="att-chip">' + (a.type === 'voice' ? '[语音] ' : a.type === 'image' ? '[图片] ' : '') + esc(a.name) +
     '<b onclick="cmtDelAtt(' + i + ')">×</b></span>').join('');
   let atBlock = '';
   if (cmtPanel.showAt) {
@@ -837,8 +1019,8 @@ function renderCommentPanel() {
   let imgBlock = '';
   if (cmtPanel.showImg) {
     imgBlock = '<div class="img-pick">' +
-      '<div class="img-pick-row" onclick="cmtImagePick(true)">📷 拍照</div>' +
-      '<div class="img-pick-row" onclick="cmtImagePick(false)">🖼 从相册选择</div>' +
+      '<div class="img-pick-row" onclick="cmtImagePick(true)">现场拍照</div>' +
+      '<div class="img-pick-row" onclick="cmtImagePick(false)">从相册选择</div>' +
     '</div>';
   }
   document.getElementById('cmtPanel').innerHTML =
@@ -852,8 +1034,8 @@ function renderCommentPanel() {
     atBlock +
     imgBlock +
     '<div class="cmt-toolbar">' +
-      '<button type="button" class="tl-btn' + (cmtPanel.recording ? ' on' : '') + '" title="语音" onclick="cmtVoice()">🎤</button>' +
-      '<button type="button" class="tl-btn' + (cmtPanel.showImg ? ' on' : '') + '" title="图片" onclick="cmtImage()">🖼</button>' +
+      '<button type="button" class="tl-btn' + (cmtPanel.recording ? ' on' : '') + '" title="语音" onclick="cmtVoice()">语音</button>' +
+      '<button type="button" class="tl-btn' + (cmtPanel.showImg ? ' on' : '') + '" title="图片" onclick="cmtImage()">图片</button>' +
       '<button type="button" class="tl-btn' + (cmtPanel.showAt ? ' on' : '') + '" title="提到" onclick="cmtToggleAt()">@</button>' +
       '<button type="button" class="btn cmt-submit" onclick="submitCommentPanel()">提交</button>' +
     '</div>';
@@ -920,11 +1102,11 @@ window.toggleLike = (replyId) => {
   if (r && btn) {
     const liked = (r.likedByUserIds || []).includes(curUser().id);
     btn.className = 'like-btn' + (liked ? ' on' : '');
-    btn.textContent = '👍 ' + (r.likeCount || 0);
+    btn.textContent = (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0);
   }
 };
 
-/* 💬：在该评论下方展开 / 收起嵌套回复输入框（只重渲染评论区） */
+/* 在该评论下方展开 / 收起嵌套回复输入框（只重渲染评论区） */
 window.toggleCommentBox = (msgId, replyId) => {
   replyBoxFor = replyBoxFor === replyId ? null : replyId;
   const el = document.getElementById('cmtArea');
@@ -1000,15 +1182,1151 @@ function renderDetail(id) {
 }
 
 /* ==========================================================================
- * 5. 池管理
+ * 5. 池管理（按身份裁剪视图）
  * ========================================================================== */
-function renderPools() {
-  if (!isDispatcher(curUser())) {
-    return '<div class="card no-perm">池管理仅总池分发人可见</div>';
-  }
-  return '<div class="wb">' +
-    '<div class="wb-main"><div class="card"><div class="card-title">池树</div>' +
-      treeHtml(poolTree(), {}) +
-    '</div></div>' +
-  '</div>';
+var pmState = {
+  mainTab: 'messages',     // 'messages' (分管池在办信息) | 'tree' (池架构管理)
+  selectedPoolId: null,
+  filterPoolId: 'all',     // 'all' 或具体 poolId
+  collapsedMap: {},
+  includeSub: true,
+  statusFilter: 'all',
+  keyword: '',
+  sortOrder: 'updated',
+  activeTab: 'members',    // in tree detail panel: 'members' | 'settings' | 'logs'
+  modal: null
+};
+window.pmState = pmState;
+
+function pmGetLevelName(level) {
+  if (level === 0) return '公司总池';
+  if (level === 1) return '分管池';
+  if (level === 2) return '部门池';
+  if (level === 3) return '小组池';
+  return '池节点';
 }
+
+function pmGetLevelTag(level) {
+  const name = pmGetLevelName(level);
+  return '<span class="pm-node-level-tag pm-level-' + (level != null ? level : 1) + '">' + name + '</span>';
+}
+
+function pmFormatOwner(pool) {
+  if (!pool || !pool.ownerIds || !pool.ownerIds.length) {
+    return '<span class="pm-node-owner unassigned">未设负责人</span>';
+  }
+  const names = pool.ownerIds.map((id) => userName(id)).join('、');
+  const count = pool.ownerIds.length;
+  // 树节点左侧空间紧凑，显示主负责人，多位时带上人数徽标，悬停可看全部
+  const shortText = count > 1 ? userName(pool.ownerIds[0]) + ' 等' + count + '人' : userName(pool.ownerIds[0]);
+  return '<span class="pm-node-owner" title="共同负责人(' + count + '人)：' + esc(names) + '">' + esc(shortText) + '</span>';
+}
+
+/* 渲染单棵树的递归节点 */
+function pmRenderNodeHtml(pool, depth, me) {
+  if (!pool || pool.status === 'DELETED') return '';
+  const allSubpools = S.pools || [];
+  const children = allSubpools.filter((p) => p.parentId === pool.id && p.status !== 'DELETED');
+  const hasChildren = children.length > 0;
+  const isCollapsed = !!pmState.collapsedMap[pool.id];
+  const isSelected = pmState.selectedPoolId === pool.id;
+
+  const metrics = poolMetrics(pool.id, pmState.includeSub);
+  const count = metrics.total;
+  const hasOverdue = metrics.hasOverdue;
+
+  // 展开折叠图标
+  let caret = '<span class="pm-node-dot"></span>';
+  if (hasChildren) {
+    caret = '<button type="button" class="pm-toggle-btn" onclick="event.stopPropagation(); pmToggleCollapse(\'' + pool.id + '\')">' +
+      (isCollapsed ? '▶' : '▼') + '</button>';
+  }
+
+  // 身份与层级判断
+  const levelTag = pmGetLevelTag(pool.level);
+  const ownerHtml = pmFormatOwner(pool);
+  const countClass = 'pm-count-pill' + (hasOverdue ? ' has-overdue' : '');
+
+  // 行缩进（每一级微调为 14px，避免深层级浪费过多宽度）
+  const paddingLeft = depth * 14;
+
+  let html = '<div class="pm-node-wrap">';
+  html += '<div class="pm-node-row' + (isSelected ? ' selected' : '') + '" style="padding-left: ' + (paddingLeft + 8) + 'px;" onclick="pmSetSelected(\'' + pool.id + '\')">';
+  html += caret;
+  html += '<div class="pm-node-main">';
+  html += '<span class="pm-node-title" title="' + esc(pool.name) + '">' + esc(pool.name) + '</span>';
+  html += levelTag;
+  html += ownerHtml;
+  html += '</div>'; // .pm-node-main
+  html += '<div class="pm-node-right">';
+  html += '<span class="' + countClass + '" title="在办聚合计数' + (hasOverdue ? '（含超时消息）' : '') + '">' + count + '</span>';
+  html += '<button type="button" class="pm-menu-btn" title="更多操作" onclick="event.stopPropagation(); pmOpenMenu(\'' + pool.id + '\')">···</button>';
+  html += '</div>'; // .pm-node-right
+  html += '</div>'; // .pm-node-row
+
+  // 子节点与新建子池入口
+  if (hasChildren && !isCollapsed) {
+    children.forEach((cp) => {
+      html += pmRenderNodeHtml(cp, depth + 1, me);
+    });
+  }
+
+  // 如果有权限且当前层级允许创建子池，且未折叠
+  if (!isCollapsed && canCreateSubPool(me, pool)) {
+    const nextLevelName = pool.level === 0 ? '一级分管池' : (pool.level === 1 ? '部门池' : '小组池');
+    html += '<div style="padding-left: ' + ((depth + 1) * 18 + 8) + 'px;">';
+    html += '<button type="button" class="pm-add-sub-btn" onclick="pmOpenCreateSub(\'' + pool.id + '\')">+ 新建' + nextLevelName + '</button>';
+    html += '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/* 渲染右侧选中池的架构配置面板（专注于架构治理、成员权限与规则配置） */
+function pmRenderDetailHtml(pool, me) {
+  if (!pool) return '<div class="card empty">请选择左侧池节点查看详情</div>';
+  const poolMsgs = poolMessages(pool.id, pmState.includeSub);
+  const memberList = (pool.memberIds || []).map((id) => userById(id)).filter(Boolean);
+  const recentLogs = getPoolRecentLogs(pool.id, 10);
+
+  const canEdit = canEditPoolSettings(me, pool);
+  const canSetOwner = canSetPoolOwner(me, pool);
+  const canManageMembers = canManagePoolMembers(me, pool);
+  const canCreate = canCreateSubPool(me, pool);
+
+  let html = '<div class="card pm-detail-card" style="padding: 18px 20px;">';
+  // 卡片顶栏
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #f0f2f7;">';
+  html += '<div style="display: flex; align-items: center; gap: 8px;">';
+  html += '<span style="font-size: 18px; font-weight: 700; color: #1f2430;">' + esc(pool.name) + '</span>';
+  html += pmGetLevelTag(pool.level);
+  if (pool.status === 'DISABLED') {
+    html += '<span class="badge b-cancelled">已停用</span>';
+  }
+  html += '</div>';
+  html += '<div style="display: flex; gap: 8px; align-items: center;">';
+  html += '<button type="button" class="btn btn-sm btn-primary" onclick="pmViewPoolMessages(\'' + pool.id + '\')">查看此池在办信息 (' + poolMsgs.length + '条) →</button>';
+  if (canCreate) {
+    html += '<button type="button" class="btn btn-sm btn-ghost" onclick="pmOpenCreateSub(\'' + pool.id + '\')">+ 子池</button>';
+  }
+  html += '</div>';
+  html += '</div>'; // top bar
+
+  // 核心元数据卡片（支持多位负责人展示与快捷配置）
+  const ownerIds = pool.ownerIds || [];
+  let ownerValHtml = '';
+  if (!ownerIds.length) {
+    ownerValHtml = '<span style="color:#d92d20; font-size:12px;">未设负责人</span>';
+  } else {
+    ownerValHtml = '<div class="pm-owner-chip-list">' +
+      ownerIds.map((id) => '<span class="pm-owner-chip" title="池负责人：' + esc(userName(id)) + '">' + esc(userName(id)) + '</span>').join('') +
+      '</div>';
+  }
+  if (canSetOwner) {
+    ownerValHtml += ' <button type="button" class="btn btn-sm btn-ghost" style="height: 22px; padding: 0 8px; font-size: 11px; margin-left: 6px;" onclick="pmOpenSetOwner(\'' + pool.id + '\')">' +
+      (ownerIds.length ? '配置/增减' : '+ 指定') + '</button>';
+  }
+
+  html += '<div class="pm-detail-meta-grid" style="margin-bottom: 16px;">';
+  html += '<div class="pm-meta-item wide"><div class="lbl">共同负责人 (' + ownerIds.length + '人)</div><div class="val">' + ownerValHtml + '</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">成员规模</div><div class="val">' + memberList.length + ' 人</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">办结时限</div><div class="val">' + (pool.timeoutDays || 2) + ' 天</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">允许直投</div><div class="val">' + (pool.allowDirect ? '是' : '否') + '</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">自动分配</div><div class="val">' + (pool.autoAssign ? '开启' : '关闭') + '</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">管辖层级</div><div class="val">' + pmGetLevelName(pool.level) + '</div></div>';
+  html += '</div>'; // .pm-detail-meta-grid
+
+  // 选项卡：配置治理专用（成员与负责人、池配置与规则、流转动态）
+  const curSubTab = pmState.activeTab === 'settings' ? 'settings' : (pmState.activeTab === 'logs' ? 'logs' : 'members');
+  html += '<div class="tabs" style="margin-bottom: 12px;">';
+  html += '<div class="tab' + (curSubTab === 'members' ? ' on' : '') + '" onclick="pmSetTab(\'members\')">池成员与负责人 (' + memberList.length + ')</div>';
+  html += '<div class="tab' + (curSubTab === 'settings' ? ' on' : '') + '" onclick="pmSetTab(\'settings\')">池配置与规则</div>';
+  html += '<div class="tab' + (curSubTab === 'logs' ? ' on' : '') + '" onclick="pmSetTab(\'logs\')">流转动态 (' + recentLogs.length + ')</div>';
+  html += '</div>';
+
+  // 选项卡内容
+  if (curSubTab === 'members') {
+    html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">';
+    html += '<div><span style="font-size: 13px; font-weight: 600; color: #344054;">本池成员共 ' + memberList.length + ' 人</span>' +
+      ' <span style="font-size: 12px; color: #667085;">(其中负责人 ' + ownerIds.length + ' 人)</span></div>';
+    html += '<div style="display: flex; gap: 8px;">';
+    if (canSetOwner) {
+      html += '<button type="button" class="btn btn-sm btn-ghost" onclick="pmOpenSetOwner(\'' + pool.id + '\')">配置共同负责人</button>';
+    }
+    if (canManageMembers) {
+      html += '<button type="button" class="btn btn-sm btn-primary" onclick="pmOpenAddMember(\'' + pool.id + '\')">+ 添加成员</button>';
+    }
+    html += '</div>';
+    html += '</div>';
+
+    if (!memberList.length) {
+      html += empty('本池暂未配置成员');
+    } else {
+      html += '<div class="pm-member-grid">';
+      memberList.forEach((u) => {
+        const isOwner = pool.ownerIds && pool.ownerIds.includes(u.id);
+        html += '<div class="pm-member-row">';
+        html += '<div class="pm-member-left">';
+        html += '<span class="pm-member-avatar' + (isOwner ? ' is-owner' : '') + '">' + esc(u.name.slice(0, 1)) + '</span>';
+        html += '<div><b>' + esc(u.name) + '</b> <span style="font-size: 11px; color: #98a2b3;">' + esc(u.dept || u.role || '') + '</span></div>';
+        if (isOwner) {
+          html += '<span class="pm-member-role-tag owner">共同负责人</span>';
+        } else {
+          html += '<span class="pm-member-role-tag">成员</span>';
+        }
+        html += '</div>';
+
+        html += '<div style="display: flex; gap: 6px; align-items: center;">';
+        if (canSetOwner) {
+          if (isOwner) {
+            html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px; color: #667085;" onclick="pmDemoteOwnerDirect(\'' + pool.id + '\', \'' + u.id + '\')" title="取消负责人身份">取消负责</button>';
+          } else {
+            html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px; color: #2f6bff; border-color: #b2ddff; background: #eff8ff;" onclick="pmPromoteOwnerDirect(\'' + pool.id + '\', \'' + u.id + '\')" title="增设为共同负责人">+ 设为负责人</button>';
+          }
+        }
+        if (canManageMembers && (!isOwner || pool.ownerIds.length > 1)) {
+          html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px; color: #d92d20;" onclick="pmRemoveMember(\'' + pool.id + '\', \'' + u.id + '\')">移出</button>';
+        }
+        html += '</div>';
+        html += '</div>'; // .pm-member-row
+      });
+      html += '</div>';
+    }
+  } else if (curSubTab === 'settings') {
+    // 池配置与规则 (统一采用我要填报的 form-row 样式)
+    const parentPool = pool.parentId ? poolById(pool.parentId) : null;
+    html += '<div style="background: #f8f9fc; border-radius: 8px; padding: 16px; border: 1px solid #eef1f7;">';
+    html += '<form onsubmit="event.preventDefault(); pmSubmitInlineSettings(\'' + pool.id + '\')">';
+
+    html += '<div class="form-row"><div class="form-label">池名称 <span class="req">*</span></div>' +
+      '<input type="text" id="inlinePoolName" value="' + esc(pool.name) + '" required ' + (!canEdit ? 'disabled' : '') + '></div>';
+
+    html += '<div class="form-row"><div class="form-label">所属上级池</div>' +
+      '<input type="text" value="' + (parentPool ? esc(parentPool.name) : '无（顶层池）') + '" disabled></div>';
+
+    html += '<div class="form-row"><div class="form-label">办结时限要求 (天)</div>' +
+      '<input type="number" id="inlinePoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" ' + (!canEdit ? 'disabled' : '') + '></div>';
+
+    html += '<div class="form-row"><div class="form-label">直投与分发规则</div>' +
+      '<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; margin-bottom: 6px;">' +
+        '<input type="checkbox" id="inlinePoolAllowDirect"' + (pool.allowDirect ? ' checked' : '') + ' ' + (!canEdit ? 'disabled' : '') + '> 允许填报时直接投递此池' +
+      '</label>' +
+      '<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">' +
+        '<input type="checkbox" id="inlinePoolAutoAssign"' + (pool.autoAssign ? ' checked' : '') + ' ' + (!canEdit ? 'disabled' : '') + '> 进池新事项自动分配到池负责人' +
+      '</label></div>';
+
+    if (canEdit) {
+      html += '<div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">' +
+        '<button type="submit" class="btn btn-primary btn-sm">保存池配置</button>' +
+      '</div>';
+    }
+    html += '</form>';
+    html += '</div>';
+  } else if (curSubTab === 'logs') {
+    if (!recentLogs.length) {
+      html += empty('本池暂无流转日志记录');
+    } else {
+      html += '<div style="padding: 4px 0;">';
+      recentLogs.forEach((l) => {
+        const msg = findMsg(l.messageId);
+        html += '<div class="tl-item">';
+        html += '<div class="tl-text"><b>' + esc(userName(l.actorId)) + '</b> ' + esc(logText(l));
+        if (msg) {
+          html += ' <span style="color: #2f6bff; cursor: pointer;" onclick="openMessage(\'' + msg.id + '\')">(' + esc(msg.no) + ')</span>';
+        }
+        html += '</div>';
+        html += '<div class="tl-time">' + fmtTime(l.at) + '</div>';
+        html += '</div>';
+      });
+      html += '</div>';
+    }
+  }
+
+  html += '</div>'; // .pm-detail-card
+  return html;
+}
+
+/* 渲染浮层与弹窗 */
+function pmRenderModalHtml(me) {
+  if (!pmState.modal) return '';
+  const m = pmState.modal;
+  const pool = m.poolId ? poolById(m.poolId) : null;
+
+  // 1. 操作菜单 ActionSheet 弹窗
+  if (m.type === 'menu' && pool) {
+    const canCreate = canCreateSubPool(me, pool);
+    const canSetOwner = canSetPoolOwner(me, pool);
+    const canManageMem = canManagePoolMembers(me, pool);
+    const canEdit = canEditPoolSettings(me, pool);
+    const canDisable = canDisablePool(me, pool);
+
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>' + esc(pool.name) + ' · 管理操作</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<div class="pm-modal-body">' +
+          '<div class="pm-sheet-menu">' +
+            '<button type="button" class="pm-sheet-item" onclick="pmViewPoolMessages(\'' + pool.id + '\');"><span class="pm-sheet-icon">•</span> 查看此池在办信息</button>' +
+            (canCreate ? '<button type="button" class="pm-sheet-item" onclick="pmOpenCreateSub(\'' + pool.id + '\');"><span class="pm-sheet-icon">+</span> 新建下级子池</button>' : '') +
+            (canSetOwner ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSetOwner(\'' + pool.id + '\');"><span class="pm-sheet-icon">•</span> 配置共同负责人</button>' : '') +
+            (canManageMem ? '<button type="button" class="pm-sheet-item" onclick="pmSetSelected(\'' + pool.id + '\'); pmSetTab(\'members\'); pmCloseModal();"><span class="pm-sheet-icon">•</span> 管理池成员</button>' : '') +
+            (canEdit ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSettings(\'' + pool.id + '\');"><span class="pm-sheet-icon">•</span> 池参数与规则设置</button>' : '') +
+            (canDisable ? '<button type="button" class="pm-sheet-item danger" onclick="pmToggleDisablePool(\'' + pool.id + '\');"><span class="pm-sheet-icon">•</span> ' + (pool.status === 'DISABLED' ? '启用本池' : '停用本池') + '</button>' : '') +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 2. 新建子池弹窗（支持同时指定多位负责人）
+  if (m.type === 'createSub') {
+    const parentPool = poolById(m.parentPoolId);
+    const parentName = parentPool ? parentPool.name : '公司总池';
+    const nextLevelName = parentPool ? (parentPool.level === 0 ? '分管池' : (parentPool.level === 1 ? '部门池' : '小组池')) : '子池';
+
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>新建' + nextLevelName + '</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitCreateSub()">' +
+          '<div class="pm-modal-body">' +
+            '<div class="pm-form-row">' +
+              '<label>所属上级池</label>' +
+              '<input type="text" value="' + esc(parentName) + '" disabled />' +
+              '<input type="hidden" id="newPoolParentId" value="' + (parentPool ? parentPool.id : '') + '" />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>池名称 <span style="color:#d92d20;">*</span></label>' +
+              '<input type="text" id="newPoolName" placeholder="例如：新材料研究部池、华南组池" required />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>初始负责人（支持多选）</label>' +
+              '<div class="pm-multi-select-list compact">' +
+                USERS.map((u) => {
+                  return '<label class="pm-multi-select-item">' +
+                    '<input type="checkbox" name="newPoolOwnerSelect" value="' + u.id + '" onchange="this.closest(\'.pm-multi-select-item\').classList.toggle(\'checked\', this.checked);" />' +
+                    '<span class="pm-member-avatar">' + esc(u.name.slice(0, 1)) + '</span>' +
+                    '<div class="pm-ms-info">' +
+                      '<span class="pm-ms-name">' + esc(u.name) + '</span>' +
+                      '<span class="pm-ms-dept">' + esc(u.dept || u.role) + '</span>' +
+                    '</div>' +
+                  '</label>';
+                }).join('') +
+              '</div>' +
+              '<div class="hint">可勾选一位或多位共同负责人（创建后可随时增减）</div>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>办理时限要求（天）</label>' +
+              '<input type="number" id="newPoolTimeout" value="2" min="1" max="30" />' +
+              '<div class="hint">超出该时限未办结时将在池监控中标记为超时</div>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label class="pm-switch-label">' +
+                '<span>允许直投建单</span>' +
+                '<input type="checkbox" id="newPoolAllowDirect" checked />' +
+              '</label>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label class="pm-switch-label">' +
+                '<span>进池自动分配到负责人</span>' +
+                '<input type="checkbox" id="newPoolAutoAssign" />' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary">确认创建</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 3. 池设置弹窗
+  if (m.type === 'settings' && pool) {
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>' + esc(pool.name) + ' · 池设置</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitSettings(\'' + pool.id + '\')">' +
+          '<div class="pm-modal-body">' +
+            '<div class="pm-form-row">' +
+              '<label>池名称</label>' +
+              '<input type="text" id="editPoolName" value="' + esc(pool.name) + '" required />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>办理时限（天）</label>' +
+              '<input type="number" id="editPoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label class="pm-switch-label">' +
+                '<span>允许直接投递建单</span>' +
+                '<input type="checkbox" id="editPoolAllowDirect"' + (pool.allowDirect ? ' checked' : '') + ' />' +
+              '</label>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label class="pm-switch-label">' +
+                '<span>新消息自动分配</span>' +
+                '<input type="checkbox" id="editPoolAutoAssign"' + (pool.autoAssign ? ' checked' : '') + ' />' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary">保存设置</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 4. 配置/增减池负责人弹窗（支持多选、共同负责）
+  if (m.type === 'setOwner' && pool) {
+    const curOwners = new Set(pool.ownerIds || []);
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>配置池负责人 · ' + esc(pool.name) + '</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitSetOwners(\'' + pool.id + '\')">' +
+          '<div class="pm-modal-body">' +
+            '<div style="font-size: 12px; color: #475467; margin-bottom: 12px; line-height: 1.5; background: #f8f9fc; padding: 10px 12px; border-radius: 8px; border: 1px solid #eaecf0;">' +
+              '<b>多负责人协同说明</b>：每个池可设置<b>多位共同负责人</b>。勾选的人员将共同拥有本池及下级子池的管理、分发与转派权限。' +
+            '</div>' +
+            '<div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 8px;">' +
+              '<span style="font-size: 13px; font-weight: 600; color: #344054;">勾选设为共同负责人的成员：</span>' +
+              '<span id="pmOwnerSelectCount" style="font-size: 12px; color: #2f6bff; font-weight: 500;">已选 ' + curOwners.size + ' 位</span>' +
+            '</div>' +
+            '<div class="pm-multi-select-list">' +
+              USERS.map((u) => {
+                const isChecked = curOwners.has(u.id);
+                const isMember = (pool.memberIds || []).includes(u.id);
+                return '<label class="pm-multi-select-item' + (isChecked ? ' checked' : '') + '">' +
+                  '<input type="checkbox" name="poolOwnerSelect" value="' + u.id + '"' + (isChecked ? ' checked' : '') + ' onchange="this.closest(\'.pm-multi-select-item\').classList.toggle(\'checked\', this.checked); pmUpdateOwnerSelectCount();" />' +
+                  '<span class="pm-member-avatar' + (isChecked ? ' is-owner' : '') + '">' + esc(u.name.slice(0, 1)) + '</span>' +
+                  '<div class="pm-ms-info">' +
+                    '<span class="pm-ms-name">' + esc(u.name) + '</span>' +
+                    '<span class="pm-ms-dept">' + esc(u.dept || u.role) + '</span>' +
+                  '</div>' +
+                  '<span class="pm-ms-tag' + (isChecked ? ' owner' : (isMember ? ' member' : '')) + '">' +
+                    (isChecked ? '已是负责人' : (isMember ? '本池成员' : '组织员工')) +
+                  '</span>' +
+                '</label>';
+              }).join('') +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary">保存负责人配置</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 5. 添加成员弹窗
+  if (m.type === 'addMember' && pool) {
+    const existing = new Set(pool.memberIds || []);
+    const candidates = USERS.filter((u) => !existing.has(u.id));
+
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>添加池成员 · ' + esc(pool.name) + '</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitAddMember(\'' + pool.id + '\')">' +
+          '<div class="pm-modal-body">' +
+            '<div class="pm-form-row">' +
+              '<label>选择人员</label>' +
+              '<select id="addMemberSelect">' +
+                (candidates.length ? candidates.map((u) => '<option value="' + u.id + '">' + esc(u.name) + ' (' + esc(u.dept || u.role) + ')</option>').join('') : '<option value="">无待添加候选人</option>') +
+              '</select>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary"' + (!candidates.length ? ' disabled' : '') + '>确认添加</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 6. 催办弹窗
+  if (m.type === 'urge') {
+    const msg = findMsg(m.messageId);
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>催办处理提醒</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitUrge(\'' + m.messageId + '\', \'' + (m.poolId || '') + '\')">' +
+          '<div class="pm-modal-body">' +
+            '<div class="pm-form-row">' +
+              '<label>目标消息</label>' +
+              '<input type="text" value="' + (msg ? esc(msg.no + ' ' + msg.title) : '') + '" disabled />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>催办说明</label>' +
+              '<textarea id="urgeNote" rows="3" placeholder="请尽快处理客户诉求，谢谢。">此事项已临近/超出处理时限，请当前经办人加紧办理并反馈进展！</textarea>' +
+              '<div class="hint">提交后将通过企业微信机器人向本池经办人推送加急通知并计入流转日志。</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary" style="background:#d92d20; border-color:#d92d20;">发送催办通知</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 7. 转派弹窗
+  if (m.type === 'transfer') {
+    const msg = findMsg(m.messageId);
+    const visibleSubtree = visiblePoolSubtree(me);
+    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
+      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
+        '<div class="pm-modal-head">' +
+          '<h3>转派消息责任池</h3>' +
+          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
+        '</div>' +
+        '<form onsubmit="event.preventDefault(); pmSubmitTransfer(\'' + m.messageId + '\', \'' + (m.poolId || '') + '\')">' +
+          '<div class="pm-modal-body">' +
+            '<div class="pm-form-row">' +
+              '<label>当前消息</label>' +
+              '<input type="text" value="' + (msg ? esc(msg.no + ' ' + msg.title) : '') + '" disabled />' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>转派目标池</label>' +
+              '<select id="transferTargetPool">' +
+                visibleSubtree.map((p) => '<option value="' + p.id + '">' + esc(p.name) + ' (' + pmGetLevelName(p.level) + ')</option>').join('') +
+              '</select>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>指定接单人（可选）</label>' +
+              '<select id="transferTargetUser">' +
+                '<option value="">由目标池负责人分配</option>' +
+                USERS.map((u) => '<option value="' + u.id + '">' + esc(u.name) + ' (' + esc(u.dept || u.role) + ')</option>').join('') +
+              '</select>' +
+            '</div>' +
+            '<div class="pm-form-row">' +
+              '<label>转派原因 / 附言</label>' +
+              '<textarea id="transferNote" rows="2" placeholder="填写转派业务原因与交接要求"></textarea>' +
+            '</div>' +
+          '</div>' +
+          '<div class="pm-modal-foot">' +
+            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
+            '<button type="submit" class="btn btn-primary">确认转派</button>' +
+          '</div>' +
+        '</form>' +
+      '</div>' +
+    '</div>';
+  }
+
+  return '';
+}
+
+/* 主入口函数：renderPools() */
+/* 分管池在办信息 Tab 渲染 */
+function pmRenderManagedMessagesHtml(me, root, subTreePools, allManagedMsgs) {
+  // 1. 数据统计
+  const total = allManagedMsgs.length;
+  const todoCount = allManagedMsgs.filter((m) => m.status !== 'closed' && m.status !== 'confirming').length;
+  const processingCount = allManagedMsgs.filter((m) => ['processing', 'p_group', 'p_dept', 'p_exec'].includes(m.status)).length;
+  const confirmingCount = allManagedMsgs.filter((m) => m.status === 'confirming').length;
+  const closedCount = allManagedMsgs.filter((m) => m.status === 'closed').length;
+  const overdueCount = allManagedMsgs.filter((m) => isMessageOverdue(m)).length;
+
+  // 2. 消息筛选
+  let msgs = allManagedMsgs;
+  if (pmState.filterPoolId && pmState.filterPoolId !== 'all') {
+    msgs = poolMessages(pmState.filterPoolId, true);
+  }
+
+  if (pmState.statusFilter && pmState.statusFilter !== 'all') {
+    if (pmState.statusFilter === 'todo') {
+      msgs = msgs.filter((m) => m.status !== 'closed' && m.status !== 'confirming');
+    } else if (pmState.statusFilter === 'processing') {
+      msgs = msgs.filter((m) => ['processing', 'p_group', 'p_dept', 'p_exec'].includes(m.status));
+    } else if (pmState.statusFilter === 'confirming') {
+      msgs = msgs.filter((m) => m.status === 'confirming');
+    } else if (pmState.statusFilter === 'closed') {
+      msgs = msgs.filter((m) => m.status === 'closed');
+    } else if (pmState.statusFilter === 'overdue') {
+      msgs = msgs.filter((m) => isMessageOverdue(m));
+    }
+  }
+
+  if (pmState.keyword) {
+    const kw = pmState.keyword.trim().toLowerCase();
+    msgs = msgs.filter((m) =>
+      (m.title && m.title.toLowerCase().includes(kw)) ||
+      (m.no && m.no.toLowerCase().includes(kw)) ||
+      (m.customerName && m.customerName.toLowerCase().includes(kw)) ||
+      (m.content && m.content.toLowerCase().includes(kw)) ||
+      (poolName(m.poolId) && poolName(m.poolId).toLowerCase().includes(kw))
+    );
+  }
+
+  // 排序
+  if (pmState.sortOrder === 'created') {
+    msgs = [...msgs].sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  } else if (pmState.sortOrder === 'overdueFirst') {
+    msgs = [...msgs].sort((a, b) => {
+      const aOd = isMessageOverdue(a) ? 1 : 0;
+      const bOd = isMessageOverdue(b) ? 1 : 0;
+      if (bOd !== aOd) return bOd - aOd;
+      return new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0);
+    });
+  } else {
+    // 默认最近更新
+    msgs = [...msgs].sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0));
+  }
+
+  let html = '';
+
+  // 统揽指标卡片（支持点击快速筛选）
+  html += '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px;">';
+
+  const statCard = (lbl, val, activeKey, isDanger) => {
+    const isAct = pmState.statusFilter === activeKey;
+    return '<div class="card" style="padding: 12px 14px; cursor: pointer; border: 1px solid ' + (isAct ? '#2f6bff' : '#eaecf0') + '; background: ' + (isAct ? '#f0f5ff' : '#fff') + '; transition: all 0.15s;" onclick="pmSetStatusFilter(\'' + activeKey + '\')">' +
+      '<div style="font-size: 20px; font-weight: 700; color: ' + (isDanger && val > 0 ? '#f0524d' : '#1f2430') + ';">' + val + ' <span style="font-size: 11px; font-weight: 400; color: #9aa3b5;">条</span></div>' +
+      '<div style="font-size: 12px; color: #5b6579; margin-top: 2px;">' + lbl + '</div>' +
+    '</div>';
+  };
+
+  html += statCard('管辖在办总数', total, 'all', false);
+  html += statCard('待办流转', todoCount, 'todo', false);
+  html += statCard('办理中', processingCount, 'processing', false);
+  html += statCard('待确认', confirmingCount, 'confirming', false);
+  html += statCard('已办结', closedCount, 'closed', false);
+  html += statCard('超时未结', overdueCount, 'overdue', true);
+  html += '</div>';
+
+  // 综合筛选控制台（与工作台、信息池样式高度统一）
+  html += '<div class="card" style="padding: 14px 16px; margin-bottom: 14px;">';
+  html += '<div style="display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between;">';
+
+  // 左侧：管辖池筛选下拉与状态胶囊
+  html += '<div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">';
+  html += '<span style="font-size: 12px; color: #475467; font-weight: 500;">筛选责任池：</span>';
+  html += '<select onchange="pmSetFilterPool(this.value)" style="font-size: 12px; height: 32px; padding: 0 10px; border-radius: 6px; border: 1px solid #d0d5dd; max-width: 220px;">';
+  html += '<option value="all"' + (pmState.filterPoolId === 'all' ? ' selected' : '') + '>全部分管池 (' + total + '条)</option>';
+  subTreePools.forEach((p) => {
+    const indent = p.level === 0 ? '' : (p.level === 1 ? '  ' : (p.level === 2 ? '    ' : '      '));
+    const pCount = poolMessages(p.id, true).length;
+    html += '<option value="' + p.id + '"' + (pmState.filterPoolId === p.id ? ' selected' : '') + '>' +
+      indent + esc(p.name) + ' (' + pCount + '条)' +
+    '</option>';
+  });
+  html += '</select>';
+
+  // 状态筛选 Tab 胶囊
+  html += '<div class="tabs" style="margin: 0;">';
+  const stTab = (key, label, c) => '<div class="tab' + (pmState.statusFilter === key ? ' on' : '') + '" onclick="pmSetStatusFilter(\'' + key + '\')">' + label + (c !== undefined ? ' (' + c + ')' : '') + '</div>';
+  html += stTab('all', '全部', total);
+  html += stTab('todo', '待办', todoCount);
+  html += stTab('processing', '办理中', processingCount);
+  html += stTab('confirming', '待确认', confirmingCount);
+  html += stTab('closed', '已办结', closedCount);
+  if (overdueCount > 0) {
+    html += '<div class="tab' + (pmState.statusFilter === 'overdue' ? ' on' : '') + '" style="color: #f0524d;" onclick="pmSetStatusFilter(\'overdue\')">超时 (' + overdueCount + ')</div>';
+  }
+  html += '</div>';
+  html += '</div>'; // left controls
+
+  // 右侧：搜索框与排序
+  html += '<div style="display: flex; gap: 8px; align-items: center;">';
+  html += '<input type="text" id="pmMsgSearchInput" placeholder="搜编号/标题/客户/内容/池..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px; height: 32px; width: 220px; border-radius: 6px; border: 1px solid #d0d5dd; padding: 0 10px;" />';
+  html += '<select onchange="pmSetSortOrder(this.value)" style="font-size: 12px; height: 32px; padding: 0 8px; border-radius: 6px; border: 1px solid #d0d5dd;">';
+  html += '<option value="updated"' + (pmState.sortOrder === 'updated' ? ' selected' : '') + '>按更新时间</option>';
+  html += '<option value="created"' + (pmState.sortOrder === 'created' ? ' selected' : '') + '>按提出时间</option>';
+  html += '<option value="overdueFirst"' + (pmState.sortOrder === 'overdueFirst' ? ' selected' : '') + '>超时预警优先</option>';
+  html += '</select>';
+  if (pmState.filterPoolId !== 'all' || pmState.statusFilter !== 'all' || pmState.keyword) {
+    html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 32px;" onclick="pmResetMsgFilters()">重置</button>';
+  }
+  html += '</div>'; // right controls
+
+  html += '</div>'; // flex container
+  html += '</div>'; // .card
+
+  // 消息列表渲染
+  if (!msgs.length) {
+    html += empty('当前分管范围暂无符合筛选条件的信息');
+  } else {
+    html += '<div style="display: flex; flex-direction: column; gap: 10px;">';
+    msgs.forEach((m) => {
+      const isOverdue = isMessageOverdue(m);
+      const overdueDays = m.overdueDays || (isOverdue ? 1 : 0);
+      const followed = isFollowed(m.id);
+      const activeLinks = linksOf(m.id).filter(linkActive);
+      const handlers = [...new Set(activeLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+      const poolTag = poolName(m.poolId) || '未分配';
+
+      html += '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">';
+      html += '<div class="msg-row-top">';
+      html += '<span class="msg-no">' + esc(m.no) + '</span>';
+      html += badge(m.status);
+      if (isOverdue) {
+        html += '<span class="badge b-unresolved">超时 ' + overdueDays + ' 天</span>';
+      }
+      html += '<span class="badge b-p_exec" style="max-width: 260px; overflow: hidden; text-overflow: ellipsis;" title="归属责任池：' + esc(poolTag) + '">归属池：' + esc(poolTag) + '</span>';
+      if (handlers) {
+        html += '<span class="msg-meta msg-handler">当前处理人：' + esc(handlers) + '</span>';
+      }
+      html += '</div>'; // .msg-row-top
+
+      html += '<div class="msg-title" style="font-size: 14px; font-weight: 600; color: #1f2430; margin: 2px 0;">' + esc(m.title) + '</div>';
+
+      if (m.customerName) {
+        html += '<div class="msg-info"><span class="msg-info-label">关联客户：</span><b style="color: #2f6bff;">' + esc(m.customerName) + '</b></div>';
+      }
+      if (m.content) {
+        html += '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>';
+      }
+
+      html += '<div class="msg-foot">';
+      html += '<span class="msg-meta">提出人：' + esc(userName(m.createdBy)) + ' · ' + fmtTime(m.updatedAt) + '</span>';
+      html += '<div style="display: flex; gap: 6px; align-items: center;" onclick="event.stopPropagation();">';
+      if (canUrgeOrTransfer(me) && m.status !== 'closed' && m.status !== 'cancelled') {
+        html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px;" onclick="pmOpenUrge(\'' + m.id + '\', \'' + m.poolId + '\')">催办</button>';
+        html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px;" onclick="pmOpenTransfer(\'' + m.id + '\', \'' + m.poolId + '\')">转派</button>';
+      }
+      html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px;' + (followed ? ' color: #fa8c16; border-color: #fa8c16;' : '') + '" onclick="pmToggleFollow(\'' + m.id + '\')">' + (followed ? '已关注' : '关注') + '</button>';
+      html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px;" onclick="openMessage(\'' + m.id + '\')">详情 →</button>';
+      html += '</div>'; // foot buttons
+      html += '</div>'; // .msg-foot
+
+      html += '</div>'; // .msg-row
+    });
+    html += '</div>';
+  }
+
+  return html;
+}
+
+/* 架构树与配置治理 Tab 渲染 */
+function pmRenderTreeManagementHtml(me, root, selectedPool, subTreePools, rootMetrics) {
+  let html = '<div class="pm-split">';
+
+  // 左侧：管辖池架构树
+  html += '<div class="pm-split-left">';
+  html += '<div class="card" style="padding: 16px;">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
+  html += '<div class="card-title" style="font-size: 15px; margin: 0;">管辖池架构树 <span style="font-size: 12px; font-weight: 400; color: #9aa3b5;">(' + subTreePools.length + '个节点)</span></div>';
+  if (canCreateTopPool(me)) {
+    html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px;" onclick="pmOpenCreateSub(\'p_company\')">+ 新建分管池</button>';
+  }
+  html += '</div>';
+
+  // 树筛选栏 (统一采用标准 filters 样式)
+  html += '<div class="filters" style="margin-bottom: 12px; gap: 8px;">';
+  html += '<input type="text" id="pmSearchInput" placeholder="搜池名称 / 负责人..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px;" />';
+  html += '<select onchange="pmSetIncludeSub(this.value === \'true\')" style="font-size: 12px;">';
+  html += '<option value="true"' + (pmState.includeSub ? ' selected' : '') + '>含下级聚合</option>';
+  html += '<option value="false"' + (!pmState.includeSub ? ' selected' : '') + '>仅看本级</option>';
+  html += '</select>';
+  html += '</div>';
+
+  html += '<div class="pm-tree-body" style="max-height: 640px; overflow-y: auto; padding-right: 2px;">';
+  html += pmRenderNodeHtml(root, 0, me);
+  html += '</div>';
+
+  html += '</div>'; // .card
+  html += '</div>'; // .pm-split-left
+
+  // 右侧：选中节点详情面板
+  html += '<div class="pm-split-right">';
+  html += pmRenderDetailHtml(selectedPool, me);
+  html += '</div>'; // .pm-split-right
+
+  html += '</div>'; // .pm-split
+  return html;
+}
+
+/* 主入口函数：renderPools() */
+function renderPools() {
+  const me = curUser();
+  const root = userRootPool(me);
+
+  // 如果普通员工没有所属管理根节点
+  if (!root) {
+    return '<div class="card empty" style="max-width: 640px; margin: 40px auto; padding: 32px 24px;">' +
+      '<div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1f2430;">您当前身份为普通员工，暂无池管理权限</div>' +
+      '<div style="font-size: 13px; color: #667085; max-width: 480px; margin: 0 auto 20px; line-height: 1.6;">' +
+        '当前身份（<b>' + esc(me.name) + ' · ' + (me.title || ROLES[me.role]) + '</b>）属于基层员工。请在右上角切换为<b>总池分发人、分管高管或部门/小组负责人</b>，以体验按职级授权裁剪的池管理架构树。' +
+      '</div>' +
+      '<div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">' +
+        '<button type="button" class="btn btn-primary" onclick="changeIdentity(\'u_qy\')">切为 李倩影 · 总池分发人 (全树)</button>' +
+        '<button type="button" class="btn btn-ghost" onclick="changeIdentity(\'u_wjx\')">切为 王冀湘 · 分管人</button>' +
+        '<button type="button" class="btn btn-ghost" onclick="changeIdentity(\'u_zm\')">切为 周明 · 部门负责人</button>' +
+      '</div>' +
+    '</div>';
+  }
+
+  // 保证选中的 pool 存在且在当前身份的可见子树中
+  const visibleSubtree = visiblePoolSubtree(me);
+  if (!pmState.selectedPoolId || !visibleSubtree.some((p) => p.id === pmState.selectedPoolId)) {
+    pmState.selectedPoolId = root.id;
+  }
+  const selectedPool = poolById(pmState.selectedPoolId) || root;
+
+  // 根节点子树统揽数据统计
+  const rootMetrics = poolMetrics(root.id, true);
+  const subTreePools = getPoolSubtree(root.id);
+  const allManagedMsgs = poolMessages(root.id, true);
+  const deptCount = subTreePools.filter((p) => p.level === 2).length;
+  const groupCount = subTreePools.filter((p) => p.level === 3).length;
+
+  let scopeSub = '管辖根池：' + esc(root.name);
+  if (root.level === 0) {
+    scopeSub += '（公司总览 · 全树管辖）';
+  } else if (root.level === 1) {
+    scopeSub += '（含下级 ' + deptCount + '个部门 / ' + groupCount + '个组）';
+  } else if (root.level === 2) {
+    scopeSub += '（含下级 ' + groupCount + '个组）';
+  } else {
+    scopeSub += '（叶子节点）';
+  }
+
+  let html = '<div class="pm-container">';
+
+  // 1. 顶部身份与全局概览卡片 (与工作台、信息池风格完全统一)
+  html += '<div class="card" style="margin-bottom: 14px; padding: 18px 20px;">';
+  html += '<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;">';
+  html += '<div>';
+  html += '<div class="card-title" style="margin-bottom: 4px; font-size: 17px; display: flex; align-items: center; gap: 8px;">';
+  html += '池管理 · 分管信息与组织架构';
+  html += '<span class="badge b-p_exec">管辖根池：' + esc(root.name) + '</span>';
+  if (root.level === 0) html += '<span class="badge b-done">公司全树</span>';
+  html += '</div>';
+  html += '<div style="font-size: 12px; color: #5b6579;">' +
+    esc(scopeSub) + ' · 当前身份：<b>' + esc(me.name) + '</b>（' + (me.title || ROLES[me.role]) + '）' +
+  '</div>';
+  html += '</div>';
+  html += '<div style="display: flex; gap: 8px; align-items: center;">';
+  html += '<a href="#/infopool" class="btn btn-sm btn-ghost">信息池全景 →</a>';
+  html += '</div>';
+  html += '</div>'; // top row
+
+  // 核心功能划分主 Tab：分管池在办信息 vs 池架构与配置
+  html += '<div class="tabs" style="margin-top: 14px; margin-bottom: 0;">';
+  html += '<div class="tab' + (pmState.mainTab === 'messages' ? ' on' : '') + '" onclick="pmSetMainTab(\'messages\')">分管池在办信息 (' + allManagedMsgs.length + ')</div>';
+  html += '<div class="tab' + (pmState.mainTab === 'tree' ? ' on' : '') + '" onclick="pmSetMainTab(\'tree\')">池架构与配置 (' + subTreePools.length + '个节点)</div>';
+  html += '</div>';
+  html += '</div>'; // top card
+
+  // 2. 主体内容：根据 mainTab 分离展示
+  if (pmState.mainTab === 'messages') {
+    html += pmRenderManagedMessagesHtml(me, root, subTreePools, allManagedMsgs);
+  } else {
+    html += pmRenderTreeManagementHtml(me, root, selectedPool, subTreePools, rootMetrics);
+  }
+
+  html += '</div>'; // .pm-container
+
+  // 3. 模态弹窗渲染
+  html += pmRenderModalHtml(me);
+
+  return html;
+}
+
+/* ---------- 页面事件绑定函数 ---------- */
+window.pmOnIdentityChange = function() {
+  pmState.modal = null;
+  const me = curUser();
+  const root = userRootPool(me);
+  pmState.selectedPoolId = root ? root.id : null;
+  pmState.filterPoolId = 'all';
+};
+
+window.pmSetMainTab = function(tab) {
+  pmState.mainTab = tab;
+  render();
+};
+
+window.pmSetFilterPool = function(poolId) {
+  pmState.filterPoolId = poolId;
+  render();
+};
+
+window.pmSetSortOrder = function(order) {
+  pmState.sortOrder = order;
+  render();
+};
+
+window.pmViewPoolMessages = function(poolId) {
+  pmState.filterPoolId = poolId;
+  pmState.mainTab = 'messages';
+  pmCloseModal();
+  render();
+};
+
+window.pmResetMsgFilters = function() {
+  pmState.filterPoolId = 'all';
+  pmState.statusFilter = 'all';
+  pmState.keyword = '';
+  pmState.sortOrder = 'updated';
+  render();
+};
+
+window.pmSetSelected = function(poolId) {
+  pmState.selectedPoolId = poolId;
+  render();
+};
+
+window.pmToggleCollapse = function(poolId) {
+  pmState.collapsedMap[poolId] = !pmState.collapsedMap[poolId];
+  render();
+};
+
+window.pmSetIncludeSub = function(val) {
+  pmState.includeSub = !!val;
+  render();
+};
+
+window.pmSetStatusFilter = function(val) {
+  pmState.statusFilter = val;
+  render();
+};
+
+window.pmSetKeyword = function(val) {
+  pmState.keyword = val;
+  render();
+  const el = document.getElementById('pmSearchInput');
+  if (el) {
+    el.focus();
+    el.selectionStart = el.selectionEnd = el.value.length;
+  }
+};
+
+window.pmSetTab = function(tab) {
+  pmState.activeTab = tab;
+  render();
+};
+
+window.pmOpenMenu = function(poolId) {
+  pmState.modal = { type: 'menu', poolId };
+  render();
+};
+
+window.pmOpenCreateSub = function(parentPoolId) {
+  pmState.modal = { type: 'createSub', parentPoolId };
+  render();
+};
+
+window.pmOpenSettings = function(poolId) {
+  pmState.modal = { type: 'settings', poolId };
+  render();
+};
+
+window.pmOpenSetOwner = function(poolId) {
+  pmState.modal = { type: 'setOwner', poolId };
+  render();
+};
+
+window.pmOpenAddMember = function(poolId) {
+  pmState.modal = { type: 'addMember', poolId };
+  render();
+};
+
+window.pmOpenUrge = function(messageId, poolId) {
+  pmState.modal = { type: 'urge', messageId, poolId };
+  render();
+};
+
+window.pmOpenTransfer = function(messageId, poolId) {
+  pmState.modal = { type: 'transfer', messageId, poolId };
+  render();
+};
+
+window.pmCloseModal = function() {
+  pmState.modal = null;
+  render();
+};
+
+window.pmUpdateOwnerSelectCount = function() {
+  const cbs = document.querySelectorAll('input[name="poolOwnerSelect"]:checked');
+  const countEl = document.getElementById('pmOwnerSelectCount');
+  if (countEl) {
+    countEl.innerText = '已选 ' + cbs.length + ' 位';
+  }
+};
+
+window.pmSubmitCreateSub = function() {
+  const parentId = document.getElementById('newPoolParentId').value;
+  const name = document.getElementById('newPoolName').value;
+  const timeoutDays = document.getElementById('newPoolTimeout').value;
+  const allowDirect = document.getElementById('newPoolAllowDirect').checked;
+  const autoAssign = document.getElementById('newPoolAutoAssign').checked;
+
+  const cbs = document.querySelectorAll('input[name="newPoolOwnerSelect"]:checked');
+  const ownerIds = Array.from(cbs).map((cb) => cb.value);
+
+  if (!name.trim()) {
+    toast('请输入池名称');
+    return;
+  }
+  const res = createPool({
+    name, parentId, ownerIds, timeoutDays, allowDirect, autoAssign
+  });
+  if (res.ok) {
+    toast('子池「' + res.pool.name + '」已成功创建');
+    pmState.selectedPoolId = res.pool.id;
+    pmState.modal = null;
+    render();
+  }
+};
+
+window.pmSubmitSettings = function(poolId) {
+  const name = document.getElementById('editPoolName').value;
+  const timeoutDays = document.getElementById('editPoolTimeout').value;
+  const allowDirect = document.getElementById('editPoolAllowDirect').checked;
+  const autoAssign = document.getElementById('editPoolAutoAssign').checked;
+
+  const res = updatePool(poolId, { name, timeoutDays, allowDirect, autoAssign });
+  if (res.ok) {
+    toast('池设置已成功更新');
+    pmState.modal = null;
+    render();
+  }
+};
+
+window.pmSubmitInlineSettings = function(poolId) {
+  const nameEl = document.getElementById('inlinePoolName');
+  const timeoutEl = document.getElementById('inlinePoolTimeout');
+  const directEl = document.getElementById('inlinePoolAllowDirect');
+  const assignEl = document.getElementById('inlinePoolAutoAssign');
+
+  const name = nameEl ? nameEl.value.trim() : '';
+  const timeoutDays = timeoutEl ? timeoutEl.value : 2;
+  const allowDirect = directEl ? directEl.checked : false;
+  const autoAssign = assignEl ? assignEl.checked : false;
+
+  const res = updatePool(poolId, { name, timeoutDays, allowDirect, autoAssign });
+  if (res.ok) {
+    toast('已保存池参数与规则配置');
+    render();
+  }
+};
+
+window.pmSubmitSetOwners = function(poolId) {
+  const cbs = document.querySelectorAll('input[name="poolOwnerSelect"]:checked');
+  const ownerIds = Array.from(cbs).map((cb) => cb.value);
+  setPoolOwners(poolId, ownerIds);
+  const names = ownerIds.map((id) => userName(id)).join('、');
+  toast('已更新池负责人（共 ' + ownerIds.length + ' 位）：' + (names || '未指定'));
+  pmState.modal = null;
+  render();
+};
+
+window.pmSubmitSetOwner = function(poolId) {
+  const el = document.getElementById('setPoolOwnerSelect');
+  if (el) {
+    const ownerId = el.value;
+    setPoolOwner(poolId, ownerId);
+    toast('负责人已更新为：' + (ownerId ? userName(ownerId) : '未指定'));
+  } else {
+    pmSubmitSetOwners(poolId);
+    return;
+  }
+  pmState.modal = null;
+  render();
+};
+
+window.pmSubmitSetOwnerDirect = function(poolId, ownerId) {
+  addPoolOwner(poolId, ownerId);
+  toast('已将 ' + userName(ownerId) + ' 设为负责人');
+  render();
+};
+
+window.pmPromoteOwnerDirect = function(poolId, userId) {
+  addPoolOwner(poolId, userId);
+  toast('已增设 ' + userName(userId) + ' 为本池共同负责人');
+  render();
+};
+
+window.pmDemoteOwnerDirect = function(poolId, userId) {
+  const p = poolById(poolId);
+  if (p && p.ownerIds && p.ownerIds.length <= 1) {
+    if (!confirm('提示：' + userName(userId) + ' 是本池目前唯一的负责人。确定要取消其负责人身份吗？')) {
+      return;
+    }
+  }
+  removePoolOwner(poolId, userId);
+  toast('已取消 ' + userName(userId) + ' 的负责人身份');
+  render();
+};
+
+window.pmSubmitAddMember = function(poolId) {
+  const userId = document.getElementById('addMemberSelect').value;
+  if (!userId) return;
+  addPoolMember(poolId, userId);
+  toast('已将 ' + userName(userId) + ' 加入池成员');
+  pmState.modal = null;
+  render();
+};
+
+window.pmRemoveMember = function(poolId, userId) {
+  if (!confirm('确定将 ' + userName(userId) + ' 移出该池成员名单吗？')) return;
+  removePoolMember(poolId, userId);
+  toast('已移出成员 ' + userName(userId));
+  render();
+};
+
+window.pmToggleDisablePool = function(poolId) {
+  const p = poolById(poolId);
+  if (!p) return;
+  const isDisabling = p.status !== 'DISABLED';
+  const metrics = poolMetrics(poolId, true);
+  if (isDisabling && metrics.total > 0) {
+    if (!confirm('警告：该池当前仍有 ' + metrics.total + ' 条在办消息流转！确定停用该池吗？停用后新消息将无法分发进池。')) {
+      return;
+    }
+  }
+  disablePool(poolId);
+  toast(isDisabling ? '池已停用' : '池已重新启用');
+  pmState.modal = null;
+  render();
+};
+
+window.pmSubmitUrge = function(messageId, poolId) {
+  const res = urgeMessage(messageId, poolId);
+  if (res.ok) {
+    toast('催办通知已发送');
+    pmState.modal = null;
+    render();
+  }
+};
+
+window.pmSubmitTransfer = function(messageId, fromPoolId) {
+  const targetPoolId = document.getElementById('transferTargetPool').value;
+  const targetUserId = document.getElementById('transferTargetUser').value;
+  const note = document.getElementById('transferNote').value;
+  const res = transferMessage(messageId, fromPoolId, targetPoolId, targetUserId, note);
+  if (res.ok) {
+    toast('消息已成功转派到 ' + poolName(targetPoolId));
+    pmState.modal = null;
+    render();
+  }
+};
+
+window.pmToggleFollow = function(messageId) {
+  const res = toggleFollowMessage(messageId);
+  toast(res.followed ? '已关注消息' : '已取消关注');
+  render();
+};
+
