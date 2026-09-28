@@ -20,13 +20,14 @@ const USERS = [
   { id: 'u_qy',  name: '李倩影',   wecom: 'qianying', dept: '总裁办',       role: 'dispatcher', title: '总池分发人' },
   { id: 'u_zm',  name: '周明',     wecom: 'zhouming', dept: '宏观研究部',   role: 'deptAdmin',  title: '部门负责人' },
   { id: 'u_wjx', name: '王冀湘',   wecom: 'wangjx',   dept: '研究所',       role: 'exec',       title: '研究所分管领导' },
-  { id: 'u_wyx', name: '闻勇翔',   wecom: 'wenyx',    dept: '机构业务',     role: 'exec',       title: '机构业务分管领导' },
+  { id: 'u_wyx', name: '闻勇翔',   wecom: 'wenyx',    dept: '产业服务',     role: 'exec',       title: '产业服务分管领导' },
   { id: 'u_dyw', name: '丁彦文',   wecom: 'dingyw',   dept: '财务部',       role: 'exec',       title: '财务分管领导' },
   { id: 'u_lj',  name: '刘军',     wecom: 'liujun',   dept: '纪检',         role: 'exec',       title: '纪检分管领导' },
   { id: 'u_qx',  name: '齐旭',     wecom: 'qixu',     dept: '合规风控',     role: 'exec',       title: '合规风控分管领导' },
   { id: 'u_nty', name: '倪韬雍',   wecom: 'nity',     dept: '国际业务',     role: 'exec',       title: '国际业务分管领导' },
   { id: 'u_swm', name: '邵嵬敏',   wecom: 'shaowm',   dept: '战略客户',     role: 'exec',       title: '战略客户分管领导' },
   { id: 'u_fdk', name: '房迪恺',   wecom: 'fangdk',   dept: '投资部',       role: 'exec',       title: '投资分管领导' },
+  { id: 'u_zyy', name: '张烨烨',   wecom: 'zhangyy',  dept: '公司党委',     role: 'exec',       title: '公司日常经营分管领导' },
   { id: 'u_mxf', name: '牟小凡',   wecom: 'mouxf',    dept: '人力资源',     role: 'exec',       title: '人力资源分管领导' },
   { id: 'u_wd',  name: '吴迪',     wecom: 'wudi',     dept: '金融工程部',   role: 'staff',      title: '金融工程部负责人' },
   { id: 'u_cc',  name: '陈晨',     wecom: 'chenchen', dept: '宏观研究部',   role: 'staff',      title: '宏观组负责人' },
@@ -79,8 +80,8 @@ const CONFIRM_STATE = { none: '未确认', resolved: '已解决', unresolved: '�
 /* 面向当前身份的主流程状态：待分发 / 待办 / 已办 / 已解决 */
 const FLOW_STATUS = { dispatch: '待分发', todo: '待办', done: '已办', ended: '已解决' };
 
-/* 信息来源选项 */
-const SOURCE_OPTIONS = ['客户反馈', '同业交流', '行业会议', '监管与交易所', '网络媒体', '其他'];
+/* 提议类型选项 */
+const SOURCE_OPTIONS = ['客需', '行业信息', '投诉与建议', '其他'];
 
 /* ---------- Mock 客户主数据 ----------
  * 扩展点：正式环境替换为客户工商信息 / 客户主数据接口 */
@@ -157,22 +158,47 @@ function getProfile(name) {
 function seedPools() {
   return [
     { id: 'p_company',  name: '公司总池',             type: 'company', level: 0, parentId: null,          ownerIds: ['u_qy'],          memberIds: ['u_qy'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_wjx', name: '研究所分管池（王冀湘）',   type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_wjx'],         memberIds: ['u_wjx'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_wjx', name: '王冀湘分管池',   type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_wjx'],         memberIds: ['u_wjx'], scope: '风险·经纪·交易咨询', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
     { id: 'p_dept_hg',  name: '宏观研究部池',           type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: ['u_zm', 'u_cc'],  memberIds: ['u_zm', 'u_cc', 'u_z6', 'u_s7', 'u_z8', 'u_cl', 'u_ly'], timeoutDays: 2, allowDirect: false, autoAssign: true, status: 'ACTIVE' },
     { id: 'p_grp_hg1',  name: '宏观组池',               type: 'group',   level: 3, parentId: 'p_dept_hg',   ownerIds: ['u_cc'],          memberIds: ['u_cc', 'u_z6'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
     { id: 'p_grp_hg2',  name: '策略组池',               type: 'group',   level: 3, parentId: 'p_dept_hg',   ownerIds: ['u_s7'],          memberIds: ['u_s7', 'u_z8'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
     { id: 'p_dept_jgc', name: '金融工程部池',           type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: ['u_wd'],          memberIds: ['u_wd'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_wyx', name: '机构业务分管池（闻勇翔）', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_wyx'],         memberIds: ['u_wyx'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_yjs', name: '研究所池',               type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: ['u_wjx'],         memberIds: ['u_wjx'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_zlkh', name: '战略客户部池',          type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_jj',  name: '机构金融部池',           type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_fz',  name: '各分支机构池',           type: 'dept',    level: 2, parentId: 'p_exec_wjx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_fxgl', name: '国泰君安风险管理公司池', type: 'dept',   level: 2, parentId: 'p_exec_wjx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_wyx', name: '闻勇翔分管池', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_wyx'],         memberIds: ['u_wyx'], scope: '资产管理·产业客户', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
     { id: 'p_dept_jg1', name: '机构业务一部池',         type: 'dept',    level: 2, parentId: 'p_exec_wyx',  ownerIds: ['u_wyx', 'u_ls'], memberIds: ['u_wyx', 'u_ls'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
     { id: 'p_grp_hd',   name: '华东组池',               type: 'group',   level: 3, parentId: 'p_dept_jg1',  ownerIds: ['u_ls'],          memberIds: ['u_ls'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
     { id: 'p_dept_jg2', name: '机构业务二部池',         type: 'dept',    level: 2, parentId: 'p_exec_wyx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_dyw', name: '财务分管池（丁彦文）',     type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_dyw'],         memberIds: ['u_dyw'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_lj',  name: '纪检分管池（刘军）',       type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_lj'],          memberIds: ['u_lj'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_qx',  name: '合规风控分管池（齐旭）',   type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_qx'],          memberIds: ['u_qx'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_nty', name: '国际业务分管池（倪韬雍）', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_nty'],         memberIds: ['u_nty'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_swm', name: '战略客户分管池（邵嵬敏）', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_swm'],         memberIds: ['u_swm'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_fdk', name: '投资分管池（房迪恺）',     type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_fdk'],         memberIds: ['u_fdk'], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
-    { id: 'p_exec_new', name: '新业务分管池',           type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' }
+    { id: 'p_dept_cyfz', name: '产业发展部池',          type: 'dept',    level: 2, parentId: 'p_exec_wyx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_zcgl', name: '资产管理部池',          type: 'dept',    level: 2, parentId: 'p_exec_wyx',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_dyw', name: '丁彦文分管池',     type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_dyw'],         memberIds: ['u_dyw'], scope: '财务资金', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_jhcw', name: '计划财务部池',    type: 'dept',    level: 2, parentId: 'p_exec_dyw',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_lj',  name: '刘军分管池',       type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_lj'],          memberIds: ['u_lj'], scope: '纪委·工会·团委', timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_jljs', name: '纪律检查室池',    type: 'dept',    level: 2, parentId: 'p_exec_lj',   ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_dwb', name: '党委办公室池',     type: 'dept',    level: 2, parentId: 'p_exec_lj',   ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_qx',  name: '齐旭分管池',   type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_qx'],          memberIds: ['u_qx'], scope: '合规与风险管理', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_hgfg', name: '合规与风险管理部池', type: 'dept', level: 2, parentId: 'p_exec_qx', ownerIds: [],              memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_nty', name: '倪韬雍分管池', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_nty'],         memberIds: ['u_nty'], scope: '国际客群发展', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_gj_nty', name: '国际业务部池', type: 'dept', level: 2, parentId: 'p_exec_nty',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_swm', name: '邵嵬敏分管池', type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_swm'],         memberIds: ['u_swm'], scope: '协助经纪·战略客户', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_zlkh_swm', name: '战略客户部池', type: 'dept', level: 2, parentId: 'p_exec_swm', ownerIds: [],               memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_zhgl_swm', name: '综合管理部池', type: 'dept', level: 2, parentId: 'p_exec_swm', ownerIds: [],               memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_fdk', name: '房迪恺分管池',     type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_fdk'],         memberIds: ['u_fdk'], scope: '协助投资', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_exec_zyy', name: '张烨烨分管池',     type: 'exec',    level: 1, parentId: 'p_company',   ownerIds: ['u_zyy'],         memberIds: ['u_zyy'], scope: '党委·日常经营·党建干部', timeoutDays: 2, allowDirect: true,  autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_hr',  name: '人力资源部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_zhgl', name: '综合管理部池',    type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_gj',  name: '国际业务部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_kj',  name: '跨境业务部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_it',  name: '信息技术部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: ['u_zs'],          memberIds: ['u_zs', 'u_adm'], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_lh',  name: '量化交易部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_yy',  name: '运营中心池',       type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_tz',  name: '投资部池',         type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_ib',  name: 'IB业务服务部池',   type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_wjr', name: '网络金融部池',     type: 'dept',    level: 2, parentId: 'p_exec_zyy',  ownerIds: [],                memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
+    { id: 'p_dept_xjp', name: '国泰君安期货新加坡池', type: 'dept', level: 2, parentId: 'p_exec_zyy', ownerIds: [],               memberIds: [], timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' }
   ];
 }
 
@@ -186,16 +212,17 @@ function buildSeed() {
     {
       id: 'm1', seq: 1, no: 'M-0001', title: '宏远钢铁贸易有限公司',
       content: '宏远钢铁咨询场外期权报价流程与所需材料，希望尽快对接。',
-      sources: ['客户反馈'], customerName: '宏远钢铁贸易有限公司', sourceOther: '',
+      sources: ['客需'], customerName: '宏远钢铁贸易有限公司', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
+      likeCount: 1, likedByUserIds: ['u_wjx'],
       status: 'closed',
-      creatorConfirm: { state: 'resolved', by: 'u_zs', at: T(44) },
+      creatorConfirm: { state: 'resolved', by: 'u_zs', at: T(44), replyId: 'rp1' },
       createdAt: T(50), updatedAt: T(44), closedAt: T(44)
     },
     {
       id: 'm2', seq: 2, no: 'M-0002', title: '金泰有色金属有限公司',
       content: '销售日报中工业品库存数据与上期口径不一致，请宏观组核对并给出统一口径。',
-      sources: ['客户反馈'], customerName: '金泰有色金属有限公司', sourceOther: '',
+      sources: ['客需'], customerName: '金泰有色金属有限公司', sourceOther: '',
       attachments: [{ name: '销售日报-库存对比.xlsx', size: 48200 }],
       createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'confirming',
@@ -205,7 +232,7 @@ function buildSeed() {
     {
       id: 'm3', seq: 3, no: 'M-0003', title: '客户投诉：场外期权结算单出具延迟',
       content: '客户反馈结算单超过约定时间仍未出具，涉及合规与运营多条线，请总池协调。',
-      sources: ['监管与交易所'], customerName: '', sourceOther: '',
+      sources: ['投诉与建议'], customerName: '', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'p_company',
       creatorConfirm: { state: 'none' },
@@ -214,7 +241,7 @@ function buildSeed() {
     {
       id: 'm4', seq: 4, no: 'M-0004', title: '多家同业反馈策略报告延迟发布',
       content: '多家同业反馈策略报告延迟发布，请策略组确认更新排期并尽快处理。',
-      sources: ['同业交流'], customerName: '', sourceOther: '',
+      sources: ['行业信息'], customerName: '', sourceOther: '',
       attachments: [], createdBy: 'u_ly', sourcePoolId: 'p_company', direct: false,
       status: 'p_group',
       overdue: true, overdueDays: 1,
@@ -224,7 +251,7 @@ function buildSeed() {
     {
       id: 'm5', seq: 5, no: 'M-0005', title: '交易系统早盘登录异常',
       content: '今日早盘多名客户反映 APP 登录验证码延迟，疑似短信通道抖动。',
-      sources: ['同业交流'], customerName: '', sourceOther: '',
+      sources: ['行业信息'], customerName: '', sourceOther: '',
       attachments: [{ name: '登录异常截图.png', size: 91300 }],
       createdBy: 'u_ly', sourcePoolId: 'p_company', direct: false,
       status: 'p_company',
@@ -234,7 +261,7 @@ function buildSeed() {
     {
       id: 'm6', seq: 6, no: 'M-0006', title: '二季度宏观解读路演安排',
       content: '机构客户希望安排二季度宏观解读路演，需要研究所出解读报告、金融工程部与宏观组补数据。',
-      sources: ['行业会议'], customerName: '', sourceOther: '',
+      sources: ['投诉与建议'], customerName: '', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'p_dept',
       creatorConfirm: { state: 'none' },
@@ -243,7 +270,7 @@ function buildSeed() {
     {
       id: 'm7', seq: 7, no: 'M-0007', title: '华东区域重点客户结算核对',
       content: '客户反馈结算单超过约定时间仍未出具，请华东组尽快联系客户核对账单。',
-      sources: ['客户反馈'], customerName: '上海东方能源发展有限公司', sourceOther: '',
+      sources: ['客需'], customerName: '上海东方能源发展有限公司', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'p_group',
       creatorConfirm: { state: 'none' },
@@ -252,7 +279,7 @@ function buildSeed() {
     {
       id: 'm8', seq: 8, no: 'M-0008', title: '重点机构准入补充资料说明',
       content: '机构业务一部关于最新准入政策需要补齐资信材料，请经办人尽快跟进。',
-      sources: ['监管与交易所'], customerName: '', sourceOther: '',
+      sources: ['行业信息'], customerName: '', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'p_dept',
       creatorConfirm: { state: 'none' },
@@ -261,7 +288,7 @@ function buildSeed() {
     {
       id: 'm9', seq: 9, no: 'M-0009', title: '宏观数据口径核对与差异说明',
       content: '客户询问宏观数据口径与上月统计差异，需宏观组提供口径对比与说明。',
-      sources: ['客户反馈'], customerName: '华夏联合资产管理公司', sourceOther: '',
+      sources: ['客需'], customerName: '华夏联合资产管理公司', sourceOther: '',
       attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_company', direct: false,
       status: 'p_group',
       creatorConfirm: { state: 'none' },
@@ -354,7 +381,8 @@ function buildSeed() {
     { id: 'rp3', messageId: 'm2', poolId: 'p_grp_hg1', authorId: 'u_ly', parentReplyId: null, content: '已核对，统一按交易所口径更新，详见附件。', attachments: [{ name: '口径说明.docx', size: 12400 }], at: T(26), likeCount: 2, likedByUserIds: ['u_zs', 'u_cl'] },
     { id: 'rp4', messageId: 'm4', poolId: 'p_exec_swm', authorId: 'u_swm', parentReplyId: null, content: '已联系客户，审计报告明天上午提供。', attachments: [], at: T(25), likeCount: 0, likedByUserIds: [] },
     { id: 'rp5', messageId: 'm6', poolId: 'p_exec_wyx', authorId: 'u_wyx', parentReplyId: null, content: '已安排客户经理对接路演时间。', attachments: [], at: T(50), likeCount: 0, likedByUserIds: [] },
-    { id: 'rp6', messageId: 'm6', poolId: 'p_dept_hg', authorId: 'u_cl', parentReplyId: null, content: '宏观组数据补充中，预计明天完成。', attachments: [], at: T(49), likeCount: 0, likedByUserIds: [] }
+    { id: 'rp6', messageId: 'm6', poolId: 'p_dept_hg', authorId: 'u_cl', parentReplyId: null, content: '宏观组数据补充中，预计明天完成。', attachments: [], at: T(49), likeCount: 0, likedByUserIds: [] },
+    { id: 'rp_demo_wjx_like', messageId: 'm4', poolId: 'p_exec_wjx', authorId: 'u_wjx', parentReplyId: null, content: '已协调策略组更新排期，新的发布时间已同步。', attachments: [], at: T(23.5), likeCount: 1, likedByUserIds: ['u_ly'] }
   ];
 
   const logs = [
@@ -392,23 +420,23 @@ function buildSeed() {
   ];
 
   const notifications = [
-    { id: 'n1',  at: T(50), to: 'u_qy',  messageId: 'm1', content: '新消息 M-0001《宏远钢铁贸易有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
-    { id: 'n2',  at: T(50), to: 'u_zm',  messageId: 'm1', content: '新消息 M-0001《宏远钢铁贸易有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
-    { id: 'n4',  at: T(49), to: 'u_wjx', messageId: 'm1', content: '消息 M-0001《宏远钢铁贸易有限公司》已分发到 研究所分管池（王冀湘）', channel: '企业微信', status: '模拟发送' },
-    { id: 'n5',  at: T(49), to: 'u_qx',  messageId: 'm1', content: '消息 M-0001《宏远钢铁贸易有限公司》已分发到 合规风控分管池（齐旭）', channel: '企业微信', status: '模拟发送' },
-    { id: 'n6',  at: T(48), to: 'u_cl',  messageId: 'm1', content: '消息 M-0001《宏远钢铁贸易有限公司》已流转到 宏观研究部池', channel: '企业微信', status: '模拟发送' },
-    { id: 'n7',  at: T(48), to: 'u_ly',  messageId: 'm1', content: '消息 M-0001《宏远钢铁贸易有限公司》已流转到 宏观研究部池', channel: '企业微信', status: '模拟发送' },
+    { id: 'n1',  at: T(50), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm1', content: '张三提交的新消息 M-0001《宏远钢铁贸易有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n2',  at: T(50), to: 'u_zm',  actorId: 'u_zs',  type: 'assign', messageId: 'm1', content: '张三提交的新消息 M-0001《宏远钢铁贸易有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n4',  at: T(49), to: 'u_wjx', actorId: 'u_qy',  type: 'assign', messageId: 'm1', content: '李倩影将消息 M-0001《宏远钢铁贸易有限公司》分发给你', channel: '企业微信', status: '模拟发送' },
+    { id: 'n5',  at: T(49), to: 'u_qx',  actorId: 'u_qy',  type: 'assign', messageId: 'm1', content: '李倩影将消息 M-0001《宏远钢铁贸易有限公司》分发给你', channel: '企业微信', status: '模拟发送' },
+    { id: 'n6',  at: T(48), to: 'u_cl',  actorId: 'u_wjx', type: 'assign', messageId: 'm1', content: '王冀湘将消息 M-0001《宏远钢铁贸易有限公司》流转给你处理', channel: '企业微信', status: '模拟发送' },
+    { id: 'n7',  at: T(48), to: 'u_ly',  actorId: 'u_wjx', type: 'assign', messageId: 'm1', content: '王冀湘将消息 M-0001《宏远钢铁贸易有限公司》流转给你处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n8',  at: T(45), to: 'u_zs',  messageId: 'm1', content: 'M-0001 所有最终落实人已确认已解决，请您进行提出人确认', channel: '企业微信', status: '模拟发送' },
     { id: 'n9',  at: T(44), to: 'u_zs',  messageId: 'm1', content: 'M-0001 落实人与提出人均确认已解决，消息已关闭', channel: '企业微信', status: '模拟发送' },
     { id: 'n10', at: T(44), to: 'u_qy',  messageId: 'm1', content: 'M-0001 落实人与提出人均确认已解决，消息已关闭', channel: '企业微信', status: '模拟发送' },
-    { id: 'n11', at: T(30), to: 'u_qy',  messageId: 'm2', content: '新消息 M-0002《金泰有色金属有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
-    { id: 'n12', at: T(27), to: 'u_ly',  messageId: 'm2', content: '消息 M-0002《金泰有色金属有限公司》已流转到 宏观组池', channel: '企业微信', status: '模拟发送' },
+    { id: 'n11', at: T(30), to: 'u_qy',  actorId: 'u_zs', type: 'assign', messageId: 'm2', content: '张三提交的新消息 M-0002《金泰有色金属有限公司》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n12', at: T(27), to: 'u_ly',  actorId: 'u_zm', type: 'assign', messageId: 'm2', content: '周明将消息 M-0002《金泰有色金属有限公司》流转给你处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n13', at: T(25), to: 'u_zs',  messageId: 'm2', content: 'M-0002 所有最终落实人已确认已解决，请您进行提出人确认', channel: '企业微信', status: '模拟发送' },
-    { id: 'n14', at: T(3),  to: 'u_qy',  messageId: 'm3', content: '新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n14', at: T(3),  to: 'u_qy',  actorId: 'u_zs', type: 'assign', messageId: 'm3', content: '张三提交的新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n15', at: T(3),  to: 'u_zm',  messageId: 'm3', content: '新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n16', at: T(26), to: 'u_swm', messageId: 'm4', content: '新消息 M-0004《东海石化能源有限公司》直投到 战略客户分管池（邵嵬敏）', channel: '企业微信', status: '模拟发送' },
-    { id: 'n17', at: T(8),  to: 'u_qy',  messageId: 'm5', content: '新消息 M-0005《交易系统早盘登录异常》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
-    { id: 'n18', at: T(51), to: 'u_wjx', messageId: 'm6', content: '消息 M-0006《二季度宏观解读路演安排》已分发到 研究所分管池（王冀湘）', channel: '企业微信', status: '模拟发送' },
+    { id: 'n17', at: T(8),  to: 'u_qy',  actorId: 'u_ly', type: 'assign', messageId: 'm5', content: '李研提交的新消息 M-0005《交易系统早盘登录异常》已进入公司总池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n18', at: T(51), to: 'u_wjx', actorId: 'u_qy', type: 'assign', messageId: 'm6', content: '李倩影将消息 M-0006《二季度宏观解读路演安排》分发给你', channel: '企业微信', status: '模拟发送' },
     { id: 'n19', at: T(51), to: 'u_wyx', messageId: 'm6', content: '消息 M-0006《二季度宏观解读路演安排》已分发到 机构业务分管池（闻勇翔）', channel: '企业微信', status: '模拟发送' },
     { id: 'n20', at: T(50), to: 'u_cl',  messageId: 'm6', content: '消息 M-0006《二季度宏观解读路演安排》已流转到 宏观研究部池', channel: '企业微信', status: '模拟发送' },
     { id: 'n21', at: T(10), to: 'u_adm', messageId: null, content: '陈立 申请新建小组池「衍生品研究组池」（上级：宏观研究部池）', channel: '企业微信', status: '模拟发送' }

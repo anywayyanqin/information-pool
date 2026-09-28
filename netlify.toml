@@ -1,0 +1,5 @@
+# Netlify 配置：本仓库的 Web 产物就是纯静态的 flow/ 前端原型（hash 路由，无需构建）
+# command 设为空操作，避免 CLI 触发任何（幽灵）构建步骤；publish 指向 flow 目录。
+[build]
+  command = "echo no-build"
+  publish = "flow"

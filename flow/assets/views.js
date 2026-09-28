@@ -43,6 +43,21 @@ function attsHtml(atts) {
     '<span class="att-chip">' + (a.type === 'voice' ? '[语音] ' : a.type === 'image' ? '[图片] ' : '') + esc(a.name) +
     (a.size ? '（' + fmtSize(a.size) + '）' : '') + '</span>').join('') + '</div>';
 }
+const PROPOSAL_TYPE_MAP = {
+  '客户反馈': '客需',
+  '同业交流': '行业信息',
+  '行业会议': '投诉与建议',
+  '监管与交易所': '投诉与建议',
+  '网络媒体': '行业信息'
+};
+function proposalTypeLabel(source) { return PROPOSAL_TYPE_MAP[source] || source; }
+function proposalTypes(m) { return [...new Set((m.sources || []).map(proposalTypeLabel).filter(Boolean))]; }
+function proposalTypeText(m) {
+  return proposalTypes(m).concat(m.sourceOther ? [m.sourceOther] : []).join('、');
+}
+function proposalTypeMatches(m, type) {
+  return proposalTypes(m).includes(type) || m.sourceOther === type;
+}
 function toast(msg) {
   const el = document.getElementById('toast');
   if (!el || !el.classList) return;
@@ -52,6 +67,16 @@ function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove('show'), 2000);
 }
 function empty(text) { return '<div class="empty">' + text + '</div>'; }
+
+/* 消息关键字模糊匹配：编号 / 标题 / 客户 / 正文 / 来源 / 提出人 / 涉及池等全局字段 */
+function msgKeywordMatch(m, kw) {
+  const k = (kw || '').trim().toLowerCase();
+  if (!k) return true;
+  const relatedPools = linksOf(m.id).map((l) => poolName(l.poolId)).join(' ');
+  return [m.no, m.title, m.customerName, m.content, m.sourceOther, userName(m.createdBy),
+    (m.tags || []).join(' '), proposalTypeText(m), (m.sources || []).join(' '), relatedPools]
+    .some((f) => f && String(f).toLowerCase().includes(k));
+}
 
 /* 当前用户可见的消息列表 */
 function visibleMessages() {
@@ -148,7 +173,7 @@ function wbList() {
   if (wbStatus === 'overdue') list = list.filter((m) => isMessageOverdue(m));
   else if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
-  if (wbKw) list = list.filter((m) => (m.no + m.title).toLowerCase().includes(wbKw.toLowerCase()));
+  if (wbKw) list = list.filter((m) => msgKeywordMatch(m, wbKw));
   return list.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
@@ -159,6 +184,67 @@ window.setWbTag = (v) => { wbTag = v; render(); };
 window.setWbKw = (v) => { wbKw = v; renderListOnly(); };
 window.openMessage = (id) => { location.hash = '#/message/' + id; };
 
+/* ---------- 导出 Excel（所有具备管理职能的身份）：导出当前 Tab + 筛选条件下的列表 ---------- */
+function wbExportTs() {
+  const d = new Date(), p = (n) => (n < 10 ? '0' + n : '' + n);
+  return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
+}
+function buildWbExportWorkbook(list) {
+  const header = ['编号', '标题', '客户', '提议类型', '标签', '状态', '涉及池', '当前处理人', '发起人', '提出时间', '最近更新', '超时', '详细描述', '回复数', '完整回复记录'];
+  const rows = list.map((m) => {
+    const links = linksOf(m.id);
+    const actLinks = links.filter(linkActive);
+    const replies = repliesOf(m.id);
+    const handlers = [...new Set(actLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+    const pools = [...new Set(links.map((l) => poolById(l.poolId)).filter(Boolean).map((p) => p.name))].join('、');
+    const src = proposalTypeText(m);
+    const replySummary = replies.map((r, index) => {
+      const parent = r.parentReplyId ? S.replies.find((x) => x.id === r.parentReplyId) : null;
+      const atts = (r.attachments || []).map((a) => a.name).filter(Boolean).join('、');
+      return (index + 1) + '. [' + fmtTime(r.at) + '] ' + userName(r.authorId) +
+        (parent ? ' 回复 ' + userName(parent.authorId) : '') + ' @ ' + poolName(r.poolId) +
+        '：' + r.content + (atts ? '（附件：' + atts + '）' : '');
+    }).join('\n');
+    return [m.no, m.title, m.customerName || '—', src || '—', (m.tags || []).join('、'),
+      MSG_STATUS[m.status] || m.status, pools || '—', handlers || (actLinks.length ? '待认领' : '—'),
+      userName(m.createdBy), fmtTime(m.createdAt), fmtTime(m.updatedAt),
+      isMessageOverdue(m) ? '是' : '—', m.content, replies.length, replySummary || '—'];
+  });
+  const ws = XLSX.utils.aoa_to_sheet([header].concat(rows));
+  ws['!cols'] = [{ wch: 9 }, { wch: 28 }, { wch: 24 }, { wch: 14 }, { wch: 16 }, { wch: 12 }, { wch: 24 }, { wch: 12 }, { wch: 9 }, { wch: 17 }, { wch: 17 }, { wch: 6 }, { wch: 60 }, { wch: 8 }, { wch: 90 }];
+
+  const replyHeader = ['问题编号', '问题标题', '回复序号', '回复类型', '回复对象', '回复人', '回复人角色', '所属池', '回复时间', '回复内容', '附件', '点赞数'];
+  const replyRows = [];
+  list.forEach((m) => {
+    repliesOf(m.id).forEach((r, index) => {
+      const author = userById(r.authorId) || {};
+      const parent = r.parentReplyId ? S.replies.find((x) => x.id === r.parentReplyId) : null;
+      replyRows.push([
+        m.no, m.title, index + 1, parent ? '回复评论' : '问题回复', parent ? userName(parent.authorId) : '—',
+        userName(r.authorId), author.title || ROLES[author.role] || '—', poolName(r.poolId), fmtTime(r.at), r.content,
+        (r.attachments || []).map((a) => a.name).filter(Boolean).join('、') || '—', r.likeCount || 0
+      ]);
+    });
+  });
+  const replyWs = XLSX.utils.aoa_to_sheet([replyHeader].concat(replyRows));
+  replyWs['!cols'] = [{ wch: 10 }, { wch: 30 }, { wch: 8 }, { wch: 12 }, { wch: 12 }, { wch: 10 }, { wch: 16 }, { wch: 20 }, { wch: 18 }, { wch: 60 }, { wch: 28 }, { wch: 8 }];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '信息池消息');
+  XLSX.utils.book_append_sheet(wb, replyWs, '回复明细');
+  return { workbook: wb, replyCount: replyRows.length };
+}
+
+window.exportWbMessages = function() {
+  const me = curUser();
+  if (!canAccessPoolManage(me)) return;
+  if (typeof XLSX === 'undefined') { toast('Excel 组件未加载，无法导出'); return; }
+  const list = wbList();
+  if (!list.length) { toast('当前筛选条件下没有可导出的消息'); return; }
+  const result = buildWbExportWorkbook(list);
+  XLSX.writeFile(result.workbook, '信息池消息导出-' + wbExportTs() + '.xlsx');
+  toast('已导出 ' + list.length + ' 条消息及 ' + result.replyCount + ' 条回复');
+};
+
 function renderListOnly() {
   const el = document.getElementById('msgList');
   if (el) el.innerHTML = wbListHtml();
@@ -166,11 +252,12 @@ function renderListOnly() {
 
 /* 工作台与池管理共用的标准信息卡片 */
 function messageListCardHtml(m, me) {
-  const handlers = [...new Set(linksOf(m.id).filter(linkActive).map((l) => handlerOfLink(l)).filter(Boolean))]
+  const actLinks = linksOf(m.id).filter(linkActive);
+  const handlers = [...new Set(actLinks.map((l) => handlerOfLink(l)).filter(Boolean))]
     .map(userName).join('、');
-  const handler = handlers || '—';
-  const src = (m.sources && m.sources.length ? m.sources.join('、') : '') +
-    (m.sourceOther ? (m.sources && m.sources.length ? '、' : '') + m.sourceOther : '');
+  /* 投整池时未指定落实人，池内成员均可认领，显示「待认领」 */
+  const handler = handlers || (actLinks.length ? '待认领' : '—');
+  const src = proposalTypeText(m);
 
   return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
     '<div class="msg-row-top">' +
@@ -179,7 +266,7 @@ function messageListCardHtml(m, me) {
       (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handler) + '</span>') +
     '</div>' +
     messageTagLineHtml(m) +
-    '<div class="msg-info"><span class="msg-info-label">信息来源：</span>' + esc(src || '—') + '</div>' +
+    '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src || '—') + '</div>' +
     '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
     '<div class="msg-foot">' +
       '<span class="msg-meta">发起人：' + esc(userName(m.createdBy)) + '</span>' +
@@ -196,6 +283,7 @@ function wbListHtml() {
 }
 
 function renderWorkbench() {
+  const me = curUser();
   const tab = effectiveWbTab();
   const statusList = [
     ['dispatch', '待分发'], ['todo', '待办'], ['done', '已办'],
@@ -203,23 +291,227 @@ function renderWorkbench() {
   ];
   const statusOpts = statusList.map((item) =>
     '<option value="' + item[0] + '"' + (wbStatus === item[0] ? ' selected' : '') + '>' + item[1] + '</option>').join('');
-  const poolOpts = '<option value="all">全部池</option>' + S.pools.map((p) =>
+  const poolOpts = '<option value="all">全部池</option>' + orderedPoolsFlat().map((p) =>
     '<option value="' + p.id + '"' + (wbPool === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
   const tagNames = [...new Set(MESSAGE_TAGS.concat(S.messages.flatMap((m) => m.tags || [])))];
   const tagOpts = '<option value="">全部标签</option>' + tagNames.map((tag) =>
     '<option value="' + esc(tag) + '"' + (wbTag === tag ? ' selected' : '') + '>' + esc(tag) + '</option>').join('');
   return '<div class="wb-main">' +
+    '<div class="wb-tabs-row">' +
     '<div class="tabs">' + wbTabs().map((t) =>
       '<div class="tab' + (tab === t.key ? ' on' : '') + '" onclick="setWbTab(\'' + t.key + '\')">' +
         t.name + '<span class="stat-count-pill">' + wbTabCount(t.key) + '</span></div>').join('') +
     '</div>' +
+    (canAccessPoolManage(me) ? '<button type="button" class="btn btn-sm wb-export-btn" onclick="exportWbMessages()">导出</button>' : '') +
+    '</div>' +
     '<div class="filters">' +
-      '<input placeholder="搜索编号 / 标题" value="' + esc(wbKw) + '" oninput="setWbKw(this.value)">' +
+      '<input placeholder="搜索编号 / 关键字" value="' + esc(wbKw) + '" oninput="setWbKw(this.value)">' +
       '<select onchange="setWbPool(this.value)">' + poolOpts + '</select>' +
       '<select onchange="setWbStatus(this.value)"><option value="">全部状态</option>' + statusOpts + '</select>' +
       '<select onchange="setWbTag(this.value)">' + tagOpts + '</select>' +
     '</div>' +
     '<div id="msgList">' + wbListHtml() + '</div>' +
+  '</div>';
+}
+
+/* ==========================================================================
+ * 1.2 消息中心（回复 / 流转 / 确认通知）
+ * ========================================================================== */
+function notificationReadKey() { return 'flow_notification_read_' + curUser().id; }
+function readNotificationIds() {
+  try { return JSON.parse(localStorage.getItem(notificationReadKey()) || '[]'); }
+  catch (e) { return []; }
+}
+function notificationsForMe() {
+  const uid = curUser().id;
+  /* 回复和赞同从业务数据反向生成，旧 Mock 数据也能完整展示互动人。 */
+  const stored = (S.notifications || []).filter((n) => n.to === uid && !['reply', 'like', 'favorite'].includes(n.type));
+  const derived = [];
+  const replySeen = new Set();
+  (S.replies || []).forEach((r) => {
+    const m = findMsg(r.messageId);
+    if (!m || r.authorId === uid) return;
+    const parent = r.parentReplyId ? S.replies.find((x) => x.id === r.parentReplyId) : null;
+    if (m.createdBy === uid || (parent && parent.authorId === uid)) {
+      const id = 'social_reply_' + uid + '_' + r.id;
+      if (!replySeen.has(id)) {
+        replySeen.add(id);
+        derived.push({
+          id, at: r.at, to: uid, actorId: r.authorId, messageId: m.id, type: 'reply',
+          content: userName(r.authorId) + (parent && parent.authorId === uid ? ' 回复了你的评论' : ' 回复了你发布的信息')
+        });
+      }
+    }
+  });
+  (S.messages || []).filter((m) => m.createdBy === uid).forEach((m) => {
+    (m.likedByUserIds || []).filter((id) => id !== uid).forEach((actorId) => derived.push({
+      id: 'social_like_msg_' + uid + '_' + m.id + '_' + actorId,
+      at: m.updatedAt, to: uid, actorId, messageId: m.id, type: 'like',
+      content: userName(actorId) + ' 赞同了你发布的信息'
+    }));
+  });
+  (S.replies || []).filter((r) => r.authorId === uid).forEach((r) => {
+    (r.likedByUserIds || []).filter((id) => id !== uid).forEach((actorId) => derived.push({
+      id: 'social_like_reply_' + uid + '_' + r.id + '_' + actorId,
+      at: r.at, to: uid, actorId, messageId: r.messageId, type: 'like',
+      content: userName(actorId) + ' 赞同了你的回复'
+    }));
+  });
+  return stored.concat(derived).sort((a, b) => b.at - a.at);
+}
+function unreadNotificationCount() {
+  const read = new Set(readNotificationIds());
+  return notificationsForMe().filter((n) => !read.has(n.id)).length;
+}
+function saveReadNotificationIds(ids) {
+  localStorage.setItem(notificationReadKey(), JSON.stringify([...new Set(ids)]));
+}
+window.openNotification = (id) => {
+  const n = notificationsForMe().find((x) => x.id === id);
+  if (!n) return;
+  saveReadNotificationIds(readNotificationIds().concat(id));
+  if (n.messageId) location.hash = '#/message/' + n.messageId;
+  else render();
+};
+window.markAllNotificationsRead = () => {
+  saveReadNotificationIds(notificationsForMe().map((n) => n.id));
+  render();
+};
+
+function notificationKind(n) {
+  const text = n.content || '';
+  if (n.type === 'reply') return { key: 'reply', cls: 'reply', label: '回复' };
+  if (n.type === 'like') return { key: 'like', cls: 'like', label: '赞同' };
+  if (text.indexOf('回复') > -1) return { key: 'reply', cls: 'reply', label: '回复' };
+  if (text.indexOf('赞同') > -1) return { key: 'like', cls: 'like', label: '赞同' };
+  if (n.type === 'assign') return { key: 'task', cls: 'task', label: '任务' };
+  if (text.indexOf('确认') > -1 || text.indexOf('关闭') > -1) return { key: 'system', cls: 'confirm', label: '确认' };
+  if (text.indexOf('分发') > -1 || text.indexOf('流转') > -1 || text.indexOf('直投') > -1) return { key: 'task', cls: 'task', label: '任务' };
+  return { key: 'system', cls: 'system', label: '通知' };
+}
+
+function noticeCategoryIcon(key) {
+  const paths = {
+    reply: '<path d="M5 5h14v10H9l-4 4V5z"/>',
+    like: '<path d="M12 20S4 15.5 4 9.5A4.5 4.5 0 0 1 12 7a4.5 4.5 0 0 1 8 2.5C20 15.5 12 20 12 20z"/>'
+  };
+  return '<svg viewBox="0 0 24 24" aria-hidden="true">' + paths[key] + '</svg>';
+}
+
+function noticeRowsHtml(list, read) {
+  return list.map((n) => {
+    const kind = notificationKind(n);
+    const m = n.messageId ? findMsg(n.messageId) : null;
+    const actor = n.actorId ? userById(n.actorId) : null;
+    const glyph = kind.key === 'reply' ? '回' : kind.key === 'like' ? '赞' : kind.key === 'task' ? '任' : kind.cls === 'confirm' ? '确' : '知';
+    return '<button type="button" class="notice-row' + (!read.has(n.id) ? ' unread' : '') + '" onclick="openNotification(\'' + n.id + '\')">' +
+      '<span class="notice-icon notice-' + kind.cls + '">' + (actor ? esc(actor.name.slice(0, 1)) : glyph) + '</span>' +
+      '<span class="notice-body"><span class="notice-head"><b>' + esc(actor ? actor.name : kind.label) + '</b><time>' + fmtTime(n.at) + '</time></span>' +
+        '<span class="notice-content">' + esc(n.content) + '</span>' +
+        (m ? '<span class="notice-link">' + esc(m.no) + ' · ' + esc(m.title) + '</span>' : '') +
+      '</span>' + (!read.has(n.id) ? '<i class="notice-dot" aria-label="未读"></i>' : '') +
+    '</button>';
+  }).join('');
+}
+
+function renderNotifications() {
+  const list = notificationsForMe();
+  const read = new Set(readNotificationIds());
+  const unread = list.filter((n) => !read.has(n.id)).length;
+  const categories = [
+    { key: 'reply', route: 'replies', label: '回复' },
+    { key: 'like', route: 'likes', label: '赞同' }
+  ];
+  const social = list.filter((n) => ['reply', 'like'].includes(notificationKind(n).key));
+  const tasks = list.filter((n) => !['reply', 'like'].includes(notificationKind(n).key));
+  return '<div class="section-page">' +
+    '<div class="section-page-head"><div><h1>消息</h1><p>处理分发给你的任务，查看与你相关的互动</p></div>' +
+      (unread ? '<button type="button" class="text-btn" onclick="markAllNotificationsRead()">全部已读</button>' : '') + '</div>' +
+    '<div class="notice-category-grid">' + categories.map((c) => {
+      const items = social.filter((n) => notificationKind(n).key === c.key);
+      const newCount = items.filter((n) => !read.has(n.id)).length;
+      return '<a class="notice-category" href="#/notifications/' + c.route + '">' +
+        '<span class="notice-category-icon">' + noticeCategoryIcon(c.key) + (newCount ? '<i>' + newCount + '</i>' : '') + '</span>' +
+        '<b>' + c.label + '我的</b><small>' + items.length + ' 条</small></a>';
+    }).join('') + '</div>' +
+    '<div class="notice-section-head"><b>任务与消息</b><span>' + tasks.length + ' 条</span></div>' +
+    '<div class="notice-list">' + (noticeRowsHtml(tasks, read) || empty('暂无任务与消息')) + '</div>' +
+  '</div>';
+}
+
+window.markNotificationKindRead = (key) => {
+  const ids = notificationsForMe().filter((n) => notificationKind(n).key === key).map((n) => n.id);
+  saveReadNotificationIds(readNotificationIds().concat(ids));
+  render();
+};
+
+function renderNotificationInteractions(key) {
+  const config = key === 'like'
+    ? { label: '赞同我的', desc: '查看谁赞同了你发布的信息或回复', emptyText: '还没有收到赞同' }
+    : { label: '回复我的', desc: '查看谁回复了你发布的信息或评论', emptyText: '还没有收到回复' };
+  const read = new Set(readNotificationIds());
+  const items = notificationsForMe().filter((n) => notificationKind(n).key === key);
+  const unread = items.filter((n) => !read.has(n.id)).length;
+  const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+  return '<div class="section-page">' +
+    '<a class="notice-back-link" href="#/notifications">' + backIcon + '<span>返回消息</span></a>' +
+    '<div class="section-page-head"><div><h1>' + config.label + '</h1><p>' + config.desc + '</p></div>' +
+      (unread ? '<button type="button" class="text-btn" onclick="markNotificationKindRead(\'' + key + '\')">全部已读</button>' : '') + '</div>' +
+    '<div class="notice-list">' + (noticeRowsHtml(items, read) || empty(config.emptyText)) + '</div>' +
+  '</div>';
+}
+
+/* ==========================================================================
+ * 1.3 我的互动（我的回复 / 我赞过的）
+ * ========================================================================== */
+let myInteractionTab = 'replies';
+window.setMyInteractionTab = (tab) => { myInteractionTab = tab; render(); };
+
+function interactionRows(list, mode) {
+  const me = curUser();
+  return list.map((r) => {
+    const m = findMsg(r.messageId);
+    if (!m) return '';
+    const author = userById(r.authorId) || {};
+    return '<button type="button" class="interaction-row" onclick="openMessage(\'' + m.id + '\')">' +
+      '<span class="interaction-top"><span class="interaction-message">' + esc(m.no) + ' · ' + esc(m.title) + '</span><time>' + fmtTime(r.at) + '</time></span>' +
+      '<span class="interaction-copy">' + esc(r.content) + '</span>' +
+      '<span class="interaction-meta">' + (mode === 'liked' ? '来自 ' + esc(author.name || '未知用户') + ' · ' : '') +
+        (mode === 'liked' ? '已赞' : '我在 ' + esc(poolName(r.poolId)) + ' 回复') +
+        (r.likeCount ? ' · ' + r.likeCount + ' 人点赞' : '') + '</span>' +
+    '</button>';
+  }).join('');
+}
+
+function publishedInteractionRows(list) {
+  return list.map((m) => {
+    const replies = repliesOf(m.id);
+    return '<button type="button" class="interaction-row published-row" onclick="openMessage(\'' + m.id + '\')">' +
+      '<span class="interaction-top"><span class="interaction-message">' + esc(m.no) + ' · ' + esc(m.title) + '</span><time>' + fmtTime(m.createdAt) + '</time></span>' +
+      '<span class="interaction-copy">' + esc(m.content) + '</span>' +
+      '<span class="interaction-meta">发布于 ' + fmtTime(m.createdAt) + ' · ' + replies.length + ' 条回复</span>' +
+    '</button>';
+  }).join('');
+}
+
+function renderMyInteractions() {
+  const me = curUser();
+  const mine = (S.replies || []).filter((r) => r.authorId === me.id).sort((a, b) => b.at - a.at);
+  const published = (S.messages || []).filter((m) => m.createdBy === me.id).sort((a, b) => b.createdAt - a.createdAt);
+  const liked = (S.replies || []).filter((r) => (r.likedByUserIds || []).includes(me.id)).sort((a, b) => b.at - a.at);
+  const current = myInteractionTab === 'liked' ? liked : mine;
+  const currentHtml = myInteractionTab === 'published' ? publishedInteractionRows(published) : interactionRows(current, myInteractionTab);
+  const emptyText = myInteractionTab === 'liked' ? '暂无赞过的回复' : myInteractionTab === 'published' ? '暂无发布记录' : '暂无回复记录';
+  return '<div class="section-page">' +
+    '<div class="profile-strip"><span class="profile-avatar">' + esc(me.name.slice(0, 1)) + '</span>' +
+      '<span><b>' + esc(me.name) + '</b><small>' + esc(me.title || ROLES[me.role] || '') + '</small></span></div>' +
+    '<div class="section-page-head"><div><h1>我的互动</h1><p>查看你回复、发布和赞过的内容</p></div></div>' +
+    '<div class="interaction-tabs" role="tablist">' +
+      '<button class="' + (myInteractionTab === 'replies' ? 'on' : '') + '" onclick="setMyInteractionTab(\'replies\')">我回复的 <span>' + mine.length + '</span></button>' +
+      '<button class="' + (myInteractionTab === 'published' ? 'on' : '') + '" onclick="setMyInteractionTab(\'published\')">我发布的 <span>' + published.length + '</span></button>' +
+      '<button class="' + (myInteractionTab === 'liked' ? 'on' : '') + '" onclick="setMyInteractionTab(\'liked\')">我赞过的 <span>' + liked.length + '</span></button>' +
+    '</div>' +
+    '<div class="interaction-list">' + (currentHtml || empty(emptyText)) + '</div>' +
   '</div>';
 }
 
@@ -263,18 +555,10 @@ function ipList() {
   }
 
   if (ipSource !== 'all') {
-    list = list.filter((m) => (m.sources && m.sources.includes(ipSource)) || m.sourceOther === ipSource);
+    list = list.filter((m) => proposalTypeMatches(m, ipSource));
   }
 
-  if (ipKw) {
-    const kw = ipKw.trim().toLowerCase();
-    list = list.filter((m) =>
-      (m.no && m.no.toLowerCase().includes(kw)) ||
-      (m.title && m.title.toLowerCase().includes(kw)) ||
-      (m.customerName && m.customerName.toLowerCase().includes(kw)) ||
-      (m.content && m.content.toLowerCase().includes(kw))
-    );
-  }
+  if (ipKw) list = list.filter((m) => msgKeywordMatch(m, ipKw));
 
   if (ipSort === 'created') {
     list.sort((a, b) => b.createdAt - a.createdAt);
@@ -304,12 +588,12 @@ function ipListHtml() {
     const poolNames = activeLinks.map((l) => poolName(l.poolId)).filter(Boolean);
     const poolTag = poolNames.length ? poolNames.join('、') : (m.sourcePoolId === 'p_company' && m.status === 'p_company' ? '公司总池（待分发）' : poolName(m.sourcePoolId));
 
-    const handlers = [...new Set(activeLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+    const handlerNames = [...new Set(activeLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+    const handlers = handlerNames || (activeLinks.length ? '待认领' : '');
     const isOverdue = isMessageOverdue(m);
     const overdueDays = m.overdueDays || (isOverdue ? 1 : 0);
 
-    const src = (m.sources && m.sources.length ? m.sources.join('、') : '') +
-      (m.sourceOther ? (m.sources && m.sources.length ? '、' : '') + m.sourceOther : '');
+    const src = proposalTypeText(m);
 
     return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
       '<div class="msg-row-top">' +
@@ -320,7 +604,7 @@ function ipListHtml() {
         (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handlers || '—') + '</span>') +
       '</div>' +
       '<div class="msg-title" style="font-size:14px; font-weight:600; color:#1f2430; margin:2px 0;">' + esc(m.title) + '</div>' +
-      (src ? '<div class="msg-info"><span class="msg-info-label">信息来源：</span>' + esc(src) + '</div>' : '') +
+      (src ? '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src) + '</div>' : '') +
       (m.customerName ? '<div class="msg-info"><span class="msg-info-label">关联客户：</span><b style="color:#2f6bff;">' + esc(m.customerName) + '</b></div>' : '') +
       '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
       '<div class="msg-foot">' +
@@ -333,74 +617,35 @@ function ipListHtml() {
 
 function renderInfoPool() {
   const me = curUser();
-  const allMsgs = visibleMessages();
-  const totalCount = allMsgs.length;
-  const dispatchCount = allMsgs.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company').length;
-  const processingCount = allMsgs.filter((m) => m.status === 'processing' || m.status === 'p_group' || m.status === 'p_dept' || m.status === 'p_exec').length;
-  const confirmingCount = allMsgs.filter((m) => m.status === 'confirming').length;
-  const closedCount = allMsgs.filter((m) => m.status === 'closed').length;
-  const overdueCount = allMsgs.filter(isMessageOverdue).length;
-
-  const poolOpts = '<option value="all">全部池</option>' + S.pools.map((p) =>
-    '<option value="' + p.id + '"' + (ipPool === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
-
-  const sourceOpts = '<option value="all">全部来源</option>' + SOURCE_OPTIONS.map((s) =>
-    '<option value="' + esc(s) + '"' + (ipSource === s ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
-
-  return '<div class="wb-main">' +
-    '<div class="card" style="margin-bottom:14px; padding:18px 20px;">' +
-      '<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px;">' +
-        '<div>' +
-          '<div class="card-title" style="margin-bottom:4px; font-size:17px; display:flex; align-items:center; gap:8px;">' +
-            '信息池 · 全景信息中心' +
-            '<span class="badge b-p_exec">当前身份：' + esc(me.name) + '</span>' +
-          '</div>' +
-          '<div style="font-size:12px; color:#5b6579;">' +
-            '集中汇聚全公司各级池（公司总池 / 分管池 / 部门池 / 小组池）流转信息，实时掌握跨组织协同动态' +
-          '</div>' +
-        '</div>' +
-        '<div style="display:flex; gap:8px;">' +
-          '<a href="#/new" class="btn btn-sm btn-primary">+ 我要填报</a>' +
-          (canAccessPoolManage(me) ? '<a href="#/pools" class="btn btn-sm btn-ghost">池架构管理 →</a>' : '') +
-        '</div>' +
+  const list = visibleMessages().sort((a, b) => b.updatedAt - a.updatedAt);
+  const cards = list.map((m) => {
+    const author = userById(m.createdBy) || {};
+    const replies = repliesOf(m.id);
+    const likeCount = replies.reduce((sum, r) => sum + (r.likeCount || 0), 0);
+    const sources = proposalTypes(m).concat(m.sourceOther ? [m.sourceOther] : []);
+    const topicTags = sources.concat(m.tags || []);
+    return '<article class="square-card" tabindex="0" role="link" onclick="openMessage(\'' + m.id + '\')" ' +
+      'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();openMessage(\'' + m.id + '\')}">' +
+      '<div class="square-byline">' +
+        '<span class="square-avatar">' + esc((author.name || '系').slice(0, 1)) + '</span>' +
+        '<span class="square-author"><b>' + esc(author.name || '系统') + '</b><small>' + esc(author.dept || '') + '</small></span>' +
+        '<time>' + fmtTime(m.updatedAt) + '</time>' +
       '</div>' +
-      '<div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(130px, 1fr)); gap:10px; margin-top:14px; padding-top:12px; border-top:1px solid #f0f2f7;">' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:#1f2430;">' + totalCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">池内总信息量</div>' +
-        '</div>' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:#fa8c16;">' + dispatchCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">待总池分发</div>' +
-        '</div>' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:#2f6bff;">' + processingCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">各级池在办</div>' +
-        '</div>' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:#d48806;">' + confirmingCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">待双确认</div>' +
-        '</div>' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:#1faa5c;">' + closedCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">已办结归档</div>' +
-        '</div>' +
-        '<div style="background:#f8f9fc; border-radius:8px; padding:10px 14px; border:1px solid #eef1f7;">' +
-          '<div style="font-size:18px; font-weight:700; color:' + (overdueCount > 0 ? '#f0524d' : '#9aa3b5') + ';">' + overdueCount + ' <span style="font-size:11px; font-weight:400; color:#9aa3b5;">条</span></div>' +
-          '<div style="font-size:11px; color:#5b6579; margin-top:2px;">超时未结预警</div>' +
-        '</div>' +
+      '<h2>' + esc(m.title) + '</h2>' +
+      '<p class="square-copy">' + esc(m.content) + '</p>' +
+      (topicTags.length ? '<div class="square-topics">' + topicTags.map((tag) => '<span>' + esc(tag) + '</span>').join('') + '</div>' : '') +
+      '<div class="square-actions">' +
+        '<span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H9l-4 4V5z"/></svg>' + replies.length + ' 条回复</span>' +
+        '<span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10v10H4V10h3zm3 10V9l4-6 1 1v5h4a2 2 0 0 1 2 2l-2 9h-9z"/></svg>' + likeCount + ' 个赞</span>' +
+        '<span class="square-no">' + esc(m.no) + '</span>' +
       '</div>' +
-    '</div>' +
-    '<div class="tabs">' + ipTabs().map((t) =>
-      '<div class="tab' + (ipTab === t.key ? ' on' : '') + '" onclick="setIpTab(\'' + t.key + '\')">' + t.name + '</div>').join('') +
-    '</div>' +
-    '<div class="filters">' +
-      '<input placeholder="搜索编号 / 标题 / 客户 / 内容..." value="' + esc(ipKw) + '" oninput="setIpKw(this.value)">' +
-      '<select onchange="setIpPool(this.value)">' + poolOpts + '</select>' +
-      '<select onchange="setIpSource(this.value)">' + sourceOpts + '</select>' +
-      '<select onchange="setIpSort(this.value)"><option value="updated"' + (ipSort === 'updated' ? ' selected' : '') + '>按最近更新</option><option value="created"' + (ipSort === 'created' ? ' selected' : '') + '>按创建时间</option></select>' +
-    '</div>' +
-    '<div id="ipListContainer">' + ipListHtml() + '</div>' +
+    '</article>';
+  }).join('');
+
+  return '<div class="square-page">' +
+    '<header class="square-head"><div><h1>信息广场</h1><p>' + esc(me.name) + '可见的信息，按最近互动排序</p></div>' +
+      '<span>' + list.length + ' 条内容</span></header>' +
+    '<div class="square-feed">' + (cards || empty('暂无可见信息')) + '</div>' +
   '</div>';
 }
 
@@ -412,6 +657,7 @@ let newSources = [];
 let newTargetPool = 'p_company';
 let newDraft = { content: '', customerName: '', sourceOther: '' };
 let newCustomerQuery = '';
+let newVoiceRecording = false;
 
 function captureNewDraft() {
   const c = document.getElementById('newContent');
@@ -446,6 +692,19 @@ function renderNewSources() {
     '<span class="chip' + (newSources.includes(s) ? ' on' : '') + '" onclick="toggleNewSource(\'' + s + '\')">' + esc(s) + '</span>').join('');
 }
 
+/* 高管人姓名：取分管池 owner，无则回退池名 */
+function execPersonName(p) {
+  return (p.ownerIds && p.ownerIds.length) ? userName(p.ownerIds[0]) : p.name;
+}
+/* 当前投递目标的可读描述 */
+function newTargetLabel() {
+  const p = poolById(newTargetPool);
+  if (!p) return '未选择';
+  if (p.type === 'company') return p.name;
+  if (p.type === 'exec') return execPersonName(p) + ' · 整条分管线';
+  const parent = p.parentId ? poolById(p.parentId) : null;
+  return (parent ? execPersonName(parent) + ' · ' : '') + p.name;
+}
 window.setNewTargetPool = (poolId) => {
   captureNewDraft();
   newTargetPool = poolId;
@@ -455,10 +714,15 @@ function renderNewPools() {
   const el = document.getElementById('newPoolChips');
   if (!el) return;
   const company = poolById('p_company');
-  const execs = S.pools.filter((p) => p.type === 'exec').sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
-  const items = [{ id: 'p_company', name: company ? company.name : '公司总池' }].concat(execs);
-  el.innerHTML = items.map((p) =>
-    '<span class="chip' + (newTargetPool === p.id ? ' on' : '') + '" onclick="setNewTargetPool(\'' + p.id + '\')">' + esc(p.name) + '</span>').join('');
+  /* 分管池按 poolTree 统一顺序展示；chip 仅显示人名，不再有展开面板 */
+  const roots = poolTree();
+  const companyRoot = roots.find((r) => r.pool.type === 'company') || roots[0];
+  const execs = companyRoot && companyRoot.children ? companyRoot.children.map((c) => c.pool) : [];
+  let html = '<span class="chip' + (newTargetPool === 'p_company' ? ' on' : '') + '" onclick="setNewTargetPool(\'p_company\')">' + esc(company ? company.name : '公司总池') + '</span>';
+  html += execs.map((p) =>
+    '<span class="chip' + (newTargetPool === p.id ? ' on' : '') + '" onclick="setNewTargetPool(\'' + p.id + '\')">' +
+      esc(execPersonName(p)) + '</span>').join('');
+  el.innerHTML = html;
 }
 
 function newCustomerOptionsHtml(query) {
@@ -503,34 +767,57 @@ window.selectNewCustomer = (name) => {
   if (picker) picker.classList.remove('show');
 };
 
+window.toggleNewVoice = () => {
+  const textarea = document.getElementById('newContent');
+  if (textarea) newDraft.content = textarea.value;
+  if (newVoiceRecording) {
+    newVoiceRecording = false;
+    const transcript = '客户反馈结算单超过约定时间仍未出具，请相关池协同确认原因并尽快反馈处理进展。';
+    const current = (newDraft.content || '').trim();
+    newDraft.content = current ? current + '\n' + transcript : transcript;
+    toast('语音已转写到详细描述');
+  } else {
+    newVoiceRecording = true;
+    toast('开始语音转写');
+  }
+  render();
+  setTimeout(() => {
+    const next = document.getElementById('newContent');
+    if (next) next.focus();
+  }, 0);
+};
+
 window.submitNew = () => {
   captureNewDraft();
   const content = newDraft.content.trim();
-  if (!newSources.length) { toast('请选择信息来源'); return; }
-  if (newSources.includes('客户反馈') && !newDraft.customerName) { toast('选择客户反馈时必须填写客户名称'); return; }
-  if (newSources.includes('其他') && !newDraft.sourceOther.trim()) { toast('选择其他时必须填写信息来源'); return; }
+  if (!newSources.length) { toast('请选择提议类型'); return; }
+  if (newSources.includes('客需') && !newDraft.customerName) { toast('选择客需时必须填写客户名称'); return; }
+  if (newSources.includes('其他') && !newDraft.sourceOther.trim()) { toast('选择其他时必须填写类型说明'); return; }
   if (!content) { toast('请填写问题描述'); return; }
   const m = createMessage({
     poolId: newTargetPool, content,
     sources: newSources.slice(),
-    customerName: newSources.includes('客户反馈') ? newDraft.customerName : '',
+    customerName: newSources.includes('客需') ? newDraft.customerName : '',
     sourceOther: newSources.includes('其他') ? newDraft.sourceOther.trim() : '',
     attachments: newMsgAtts.slice()
   });
   newMsgAtts = [];
   newSources = [];
   newTargetPool = 'p_company';
+  newExecOpen = null;
   newDraft = { content: '', customerName: '', sourceOther: '' };
   newCustomerQuery = '';
-  toast(m.direct ? '已直投到分管池' : '已投递到公司总池，待分发');
+  newVoiceRecording = false;
+  const tp = poolById(m.sourcePoolId);
+  toast(m.direct ? ('已直投到 ' + (tp ? tp.name : '目标池')) : '已投递到公司总池，待分发');
   location.hash = '#/message/' + m.id;
 };
 
 function renderNew() {
-  const needCustomer = newSources.includes('客户反馈');
+  const needCustomer = newSources.includes('客需');
   const needOther = newSources.includes('其他');
   return '<div class="card" style="max-width:720px;margin:0 auto 14px">' +
-    '<div class="form-row"><div class="form-label">信息来源<span class="req">*</span></div>' +
+    '<div class="form-row"><div class="form-label">提议类型<span class="req">*</span></div>' +
       '<div class="chip-group" id="newSourceChips"></div></div>' +
     (needCustomer ?
       '<div class="form-row"><div class="form-label">客户名称<span class="req">*</span></div>' +
@@ -542,12 +829,18 @@ function renderNew() {
           '<div class="customer-picker-options" id="newCustomerOptions">' + newCustomerOptionsHtml(newCustomerQuery) + '</div>' +
         '</div></div>' : '') +
     (needOther ?
-      '<div class="form-row"><div class="form-label">来源说明<span class="req">*</span></div>' +
-        '<input type="text" id="newSourceOther" placeholder="请填写具体信息来源" value="' + esc(newDraft.sourceOther) + '"></div>' : '') +
+      '<div class="form-row"><div class="form-label">类型说明<span class="req">*</span></div>' +
+        '<input type="text" id="newSourceOther" placeholder="请填写具体提议类型" value="' + esc(newDraft.sourceOther) + '"></div>' : '') +
     '<div class="form-row"><div class="form-label">目标池<span class="req">*</span></div>' +
       '<div class="chip-group" id="newPoolChips"></div></div>' +
     '<div class="form-row"><div class="form-label">详细描述<span class="req">*</span></div>' +
-      '<textarea id="newContent" placeholder="背景、诉求、涉及的客户或业务线等">' + esc(newDraft.content) + '</textarea></div>' +
+      '<div class="voice-textarea-wrap' + (newVoiceRecording ? ' recording' : '') + '">' +
+        '<textarea id="newContent" placeholder="背景、诉求、涉及的客户或业务线等" oninput="newDraft.content=this.value">' + esc(newDraft.content) + '</textarea>' +
+        '<button type="button" class="voice-transcribe-btn" onclick="toggleNewVoice()" aria-label="' + (newVoiceRecording ? '结束语音转写' : '开始语音转写') + '" title="' + (newVoiceRecording ? '结束语音转写' : '语音转写') + '">' +
+          '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3z"></path><path d="M5 11v1a7 7 0 0 0 14 0v-1"></path><path d="M12 19v3"></path><path d="M8 22h8"></path></svg>' +
+        '</button>' +
+        (newVoiceRecording ? '<div class="voice-transcribe-tip"><span></span>正在聆听并实时转写，再点话筒完成</div>' : '') +
+      '</div></div>' +
     '<div class="form-row"><div class="form-label">附件</div>' +
       '<div class="upbtns">' +
         '<button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById(\'newAttCam\').click()">拍照上传</button>' +
@@ -573,6 +866,8 @@ function afterRenderNew() {
  * 3. 分发 / 流转弹窗（分发入口在工作台消息行与消息详情页）
  * ========================================================================== */
 let modalState = null;
+/* 二级弹窗：按组织架构选落实人的状态 */
+let orgPicker = null;
 
 const MESSAGE_TAGS = ['重点督办', '高优先级', '需协同'];
 function messageTagsHtml(m) {
@@ -629,6 +924,7 @@ function showModal() {
   renderModal();
 }
 window.closeModal = () => {
+  closeOrgPicker();
   document.getElementById('modalMask').classList.remove('show');
   document.getElementById('modal').classList.remove('show');
   modalState = null;
@@ -636,12 +932,6 @@ window.closeModal = () => {
 
 /* 池成员（负责人 + 成员，去重） */
 function membersOf(p) { return [...new Set(p.ownerIds.concat(p.memberIds))]; }
-/* 由池 id 递归构建子树节点 {pool, children} */
-function poolNodeOf(poolId) {
-  const pool = poolById(poolId);
-  if (!pool) return null;
-  return { pool: pool, children: childPools(poolId).map((c) => poolNodeOf(c.id)).filter(Boolean) };
-}
 
 window.toggleMtNode = (pid) => {
   if (!modalState) return;
@@ -662,7 +952,7 @@ function restoreKwFocus() {
   if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 
-/* 选中整个池：追加 pool: 键，并清理该池内单点的人员键（整池已覆盖） */
+/* 勾选整池（assignMode='pool'）：与同池的指定落实人互斥 */
 window.toggleSelPool = (pid) => {
   if (!modalState) return;
   const key = 'pool:' + pid;
@@ -675,39 +965,200 @@ window.toggleSelPool = (pid) => {
   renderModal();
   restoreKwFocus();
 };
-/* 选中某个人员：目标 = 该人员所在池，落实人 = 该人员；整池已选时忽略 */
-window.toggleSelPerson = (pid, uid) => {
+
+/* 弹出组织架构选人（二级弹窗）：候选范围为全公司，本池成员置顶 */
+window.openOrgPicker = (pid) => {
   if (!modalState) return;
-  if (modalState.selected.indexOf('pool:' + pid) > -1) { toast('该池已整体选中'); return; }
-  const key = 'pers:' + pid + '|' + uid;
-  const i = modalState.selected.indexOf(key);
-  if (i > -1) modalState.selected.splice(i, 1);
-  else modalState.selected.push(key);
+  const cur = (modalState.selected || [])
+    .filter((k) => k.indexOf('pers:' + pid + '|') === 0)
+    .map((k) => k.slice(k.lastIndexOf('|') + 1));
+  orgPicker = { mode: 'assign', poolId: pid, kw: '', picked: cur };
+  document.getElementById('orgMask').classList.add('show');
+  document.getElementById('orgModal').classList.add('show');
+  renderOrgPicker();
+};
+
+/* 分享：复用同一套组织架构选人弹窗，候选为全公司任何人，确定后调用 shareMessage */
+window.openSharePicker = (msgId) => {
+  const m = findMsg(msgId);
+  if (!m) return;
+  if (!canShareMessage(curUser(), m)) { toast('当前身份无权分享'); return; }
+  orgPicker = { mode: 'share', msgId, poolId: null, kw: '', picked: (m.sharedUserIds || []).slice() };
+  document.getElementById('orgMask').classList.add('show');
+  document.getElementById('orgModal').classList.add('show');
+  renderOrgPicker();
+};
+
+window.closeOrgPicker = () => {
+  document.getElementById('orgMask').classList.remove('show');
+  document.getElementById('orgModal').classList.remove('show');
+  orgPicker = null;
+};
+
+window.orgPickerKw = (v) => {
+  if (!orgPicker) return;
+  orgPicker.kw = v;
+  renderOrgPicker();
+  const el = document.getElementById('orgKw');
+  if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+};
+
+/* 切换单人勾选（多选） */
+window.orgPickToggle = (uid) => {
+  if (!orgPicker) return;
+  const i = orgPicker.picked.indexOf(uid);
+  if (i > -1) orgPicker.picked.splice(i, 1); else orgPicker.picked.push(uid);
+  renderOrgPicker();
+};
+
+/* 整部门全选 / 取消全选 */
+window.orgPickGroup = (gi) => {
+  if (!orgPicker) return;
+  const g = orgPickerGroups()[gi];
+  if (!g) return;
+  const ids = g.users.map((u) => u.id);
+  const allOn = ids.every((id) => orgPicker.picked.indexOf(id) > -1);
+  if (allOn) orgPicker.picked = orgPicker.picked.filter((id) => ids.indexOf(id) === -1);
+  else ids.forEach((id) => { if (orgPicker.picked.indexOf(id) === -1) orgPicker.picked.push(id); });
+  renderOrgPicker();
+};
+
+/* 确定：分享模式直接落库；指派模式写回主弹窗选中集，与同池的整池模式互斥 */
+window.confirmOrgPicker = () => {
+  if (!orgPicker) return;
+  if (orgPicker.mode === 'share') {
+    const r = shareMessage(orgPicker.msgId, orgPicker.picked);
+    closeOrgPicker();
+    if (!r.ok) { toast(r.msg); return; }
+    toast('已分享给 ' + r.count + ' 人');
+    render();
+    return;
+  }
+  if (!modalState) return;
+  const pid = orgPicker.poolId;
+  modalState.selected = modalState.selected.filter((k) =>
+    k !== 'pool:' + pid && k.indexOf('pers:' + pid + '|') !== 0);
+  orgPicker.picked.forEach((uid) => modalState.selected.push('pers:' + pid + '|' + uid));
+  const n = orgPicker.picked.length;
+  closeOrgPicker();
+  renderModal();
+  if (n) toast('已指定 ' + n + ' 位落实人');
+};
+
+/* 候选分组：本池成员单独一组置顶，其余按部门分组 */
+function orgPickerGroups() {
+  if (!orgPicker) return [];
+  const pool = poolById(orgPicker.poolId);
+  const k = (orgPicker.kw || '').trim().toLowerCase();
+  const match = (u) => !k ||
+    (u.name || '').toLowerCase().includes(k) ||
+    (u.dept || '').toLowerCase().includes(k) ||
+    (u.title || '').toLowerCase().includes(k);
+  const memIds = pool ? membersOf(pool) : [];
+  const groups = [];
+  const mems = memIds.map((id) => userById(id)).filter(Boolean).filter(match);
+  if (mems.length) groups.push({ name: '本池成员', users: mems, own: true });
+  USERS.filter((u) => memIds.indexOf(u.id) === -1 && match(u)).forEach((u) => {
+    const d = u.dept || '其他人员';
+    let g = groups.find((x) => x.name === d && !x.own);
+    if (!g) { g = { name: d, users: [] }; groups.push(g); }
+    g.users.push(u);
+  });
+  return groups;
+}
+
+/* 复用「添加池成员」同款组织架构选择形态：部门分组复选框、本池成员置顶为首组，
+ * 弹窗打开即可直接勾到本池对应的人选 */
+function renderOrgPicker() {
+  if (!orgPicker) return;
+  const pool = poolById(orgPicker.poolId);
+  const groups = orgPickerGroups();
+  const picked = orgPicker.picked;
+  const isShare = orgPicker.mode === 'share';
+
+  const groupsHtml = groups.length
+    ? groups.map((g, gi) => {
+        const ids = g.users.map((u) => u.id);
+        const onCount = ids.filter((id) => picked.indexOf(id) > -1).length;
+        const allOn = onCount === ids.length;
+        return '<div class="pm-org-group">' +
+          '<label class="pm-org-dept' + (g.own ? ' own' : '') + '">' +
+            '<input type="checkbox"' + (allOn ? ' checked' : '') + ' onchange="orgPickGroup(' + gi + ')" />' +
+            '<span>' + esc(g.name) + '</span>' +
+            '<i>' + g.users.length + '人' + (onCount && !allOn ? ' · 已选 ' + onCount : '') + '</i>' +
+          '</label>' +
+          '<div class="pm-org-members">' + g.users.map((u) => {
+            const on = picked.indexOf(u.id) > -1;
+            return '<label class="pm-org-person' + (on ? ' on' : '') + '">' +
+              '<input type="checkbox"' + (on ? ' checked' : '') + ' onchange="orgPickToggle(\'' + u.id + '\')" />' +
+              '<span class="pm-member-avatar">' + esc((u.name || '?').slice(0, 1)) + '</span>' +
+              '<span class="pm-org-person-info"><b>' + esc(u.name) + '</b><small>' + esc(u.title || ROLES[u.role] || '') + '</small></span>' +
+            '</label>';
+          }).join('') + '</div>' +
+        '</div>';
+      }).join('')
+    : empty('没有匹配的人员');
+
+  document.getElementById('orgModal').innerHTML =
+    '<h3>' + (isShare ? '分享 · 抄送他人查看并回复' : '指定落实人 · ' + esc(pool ? pool.name : '')) + '</h3>' +
+    '<div class="form-row" style="margin-bottom:10px"><input type="text" id="orgKw" placeholder="搜索姓名 / 部门 / 职位" value="' + esc(orgPicker.kw) + '" oninput="orgPickerKw(this.value)"></div>' +
+    '<div class="pm-member-picker-head"><b>' + (isShare ? '按组织架构选择人员' : '按组织架构选择落实人') + '</b><span>已选 ' + picked.length + ' 人</span></div>' +
+    '<div class="pm-org-picker">' + groupsHtml + '</div>' +
+    '<div class="hint pm-share-hint">' + (isShare
+      ? '被分享人可查看该消息并回复，但不进入其待办、也不承担处理与确认义务。'
+      : '被指定的落实人将直接收到该信息的待办，并负责处理与回填结论。') + '</div>' +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" onclick="closeOrgPicker()">取消</button>' +
+      '<button class="btn" onclick="confirmOrgPicker()">' + (isShare ? '确认分享' : '确定') + '</button>' +
+    '</div>';
+}
+
+window.clearSelPerson = (pid, uid) => {
+  if (!modalState) return;
+  if (uid) {
+    const key = 'pers:' + pid + '|' + uid;
+    const i = modalState.selected.indexOf(key);
+    if (i > -1) modalState.selected.splice(i, 1);
+  } else {
+    modalState.selected = modalState.selected.filter((k) => k.indexOf('pers:' + pid + '|') !== 0);
+  }
   renderModal();
   restoreKwFocus();
 };
 
-/* 解析实际流转目标：显式选中的池 + 选中人员所在池（去重，整池优先于单点人员） */
+/* 从已选 chip 区移除一个目标 */
+window.removeSelTarget = (key) => {
+  if (!modalState) return;
+  const i = modalState.selected.indexOf(key);
+  if (i > -1) modalState.selected.splice(i, 1);
+  renderModal();
+  restoreKwFocus();
+};
+
+/* 解析实际投递目标：整池与直投人两类；
+ * 同一池若多人被指定则合并到 handlerId 数组，store 层按人拆分为多条 link */
 function resolveSelTargets() {
-  const sel = modalState.selected;
-  const poolExp = [];
-  const personPool = {};
-  sel.forEach((k) => {
-    if (k.indexOf('pool:') === 0) poolExp.push(k.slice(5));
-    else if (k.indexOf('pers:') === 0) {
-      const rest = k.slice(5);
-      const i = rest.indexOf('|');
-      const pid = rest.slice(0, i), uid = rest.slice(i + 1);
-      (personPool[pid] = personPool[pid] || []).push(uid);
-    }
-  });
   const out = [];
   const done = {};
-  poolExp.forEach((pid) => { if (!done[pid]) { out.push({ poolId: pid, handlerId: null }); done[pid] = 1; } });
-  Object.keys(personPool).forEach((pid) => {
-    if (done[pid]) return;
-    out.push({ poolId: pid, handlerId: personPool[pid][0] });
-    done[pid] = 1;
+  (modalState.selected || []).forEach((k) => {
+    if (k.indexOf('pool:') === 0) {
+      const pid = k.slice(5);
+      if (done[pid]) return;
+      out.push({ poolId: pid, assignMode: 'pool', handlerId: null, key: k });
+      done[pid] = 1;
+    }
+  });
+  (modalState.selected || []).forEach((k) => {
+    if (k.indexOf('pers:') === 0) {
+      const rest = k.slice(5);
+      const i = rest.lastIndexOf('|');
+      const pid = rest.slice(0, i), uid = rest.slice(i + 1);
+      if (done[pid]) return;
+      done[pid] = 1;
+      const ids = modalState.selected.filter((x) => x.indexOf('pers:' + pid + '|') === 0)
+        .map((x) => x.slice(x.lastIndexOf('|') + 1));
+      out.push({ poolId: pid, assignMode: 'person', handlerId: ids, key: 'pers:' + pid + ':*' });
+    }
   });
   return out;
 }
@@ -726,13 +1177,14 @@ window.confirmModal = () => {
   render();
 };
 
-/* 池人员评论提交后二选一：标记为已解决 / 流转（内容来自底部评论面板） */
+/* 池人员评论提交后二选一：结束处理 / 流转（内容来自底部评论面板）；
+ * 结束处理＝本池落实完毕，仍需提出人确认后整条信息才关闭 */
 window.submitEnd = () => {
   if (!modalState) return;
   const st = modalState;
   const m = findMsg(st.msgId);
   const link = linkById(st.linkId);
-  if (!canConfirmHandler(curUser(), m, link)) { toast('当前无权标记为已解决'); return; }
+  if (!canConfirmHandler(curUser(), m, link)) { toast('当前无权结束处理'); return; }
   const r = addReply(st.msgId, st.poolId, st.content, st.atts || []);
   if (!r.ok) { toast(r.msg); return; }
   const result = setHandlerConfirm(st.msgId, st.linkId, 'resolved', '');
@@ -752,72 +1204,90 @@ window.submitForward = () => {
   renderModal();
 };
 
-/* 统一选择树节点渲染：池为分支节点，其成员为叶子；返回 {html, hit, keep}
- * hit = 子树内是否有显式选中（含本池整选或任一人员选中）；下级被选中时上级呈半选态；
+/* 选择树节点渲染：只渲染池行，成员不再展开为兄弟节点，
+ * 改为通过行内「指定落实人」按钮展开内联单选面板。
+ * 返回 {html, hit, keep}：hit = 子树内是否有显式选中（下级选中时上级呈半选态）；
  * keep = 搜索时该节点是否可见。 */
+/* 池行名称：分管池以人名为主、部门/小组池以池名为主（不再展示分管线/负责人副行注解） */
+function mtNameHtml(p) {
+  const main = p.type === 'exec' ? execPersonName(p) : p.name;
+  return '<span class="mt-name-main">' + esc(main) + '</span>';
+}
 function selNode(n, ctx, isRoot, kw) {
   const p = n.pool;
   const k = (kw || '').trim().toLowerCase();
   const sel = modalState.selected;
   const poolSel = sel.indexOf('pool:' + p.id) > -1;
   const mem = membersOf(p);
-  const personSelSet = mem.filter((uid) => sel.indexOf('pers:' + p.id + '|' + uid) > -1);
-  const hasPersonSel = personSelSet.length > 0;
+  /* 已选的落实人：直接从选中集取（同一池可指定多人）；
+   * 落实人由组织架构弹窗选出，可能不是本池成员，故不能从 mem 过滤 */
+  const handlerIds = sel
+    .filter((k2) => k2.indexOf('pers:' + p.id + '|') === 0)
+    .map((k2) => k2.slice(k2.lastIndexOf('|') + 1));
+  const hasPersonSel = handlerIds.length > 0;
 
   const kids = n.children.map((c) => selNode(c, ctx, false, kw));
   const childHtml = kids.map((x) => x.html).join('');
   const childHit = kids.some((x) => x.hit);
   const childKept = kids.some((x) => x.keep);
 
-  let personHtml = '';
-  let personKept = 0;
-  if (!isRoot) {
-    mem.forEach((uid) => {
-      const name = userName(uid);
-      const u = userById(uid) || {};
-      const pSel = sel.indexOf('pers:' + p.id + '|' + uid) > -1;
-      const visible = !k || name.toLowerCase().includes(k) || hasPersonSel || poolSel ||
-        (k && p.name.toLowerCase().includes(k));
-      if (!visible) return;
-      personKept++;
-      const pPath = poolSel && !pSel;
-      const checked = pSel || pPath;
-      const cls = pSel ? ' sel' : (pPath ? ' path' : '');
-      const pSelectable = ctx.canSelect(p) && !ctx.linkedIds.includes(p.id);
-      personHtml += '<div class="mt-person' + cls + (pSelectable ? '' : ' dis') + '"' +
-        (pSelectable ? ' onclick="toggleSelPerson(\'' + p.id + '\',\'' + uid + '\')"' : '') + '>' +
-        '<span class="mt-check' + (pSel ? ' on' : (pPath ? ' path' : (!pSelectable ? ' dis' : ''))) + '">' + (checked ? '✓' : '') + '</span>' +
-        '<span class="mt-avatar">' + esc((name || '?').slice(0, 1)) + '</span>' +
-        '<span class="mt-pname">' + esc(name) + '</span>' +
-        '<span class="mt-prole">' + esc(ROLES[u.role] || '') + '</span>' +
-      '</div>';
-    });
-  }
+  /* 搜索命中本池任一成员时，该池行保留并自动展开落实人面板 */
+  const memberHits = (!isRoot && k) ? mem.filter((uid) => userName(uid).toLowerCase().includes(k)) : [];
 
   const hit = poolSel || hasPersonSel || childHit;
   const poolNameMatch = k ? p.name.toLowerCase().includes(k) : true;
-  const keep = !k || poolNameMatch || poolSel || hasPersonSel || personKept > 0 || childKept;
+  const keep = !k || poolNameMatch || poolSel || hasPersonSel || memberHits.length > 0 || childKept;
   if (!keep) return { html: '', hit: hit, keep: false };
 
   const pathChecked = hit && !poolSel;
   const linked = ctx.linkedIds.indexOf(p.id) > -1;
   const selectable = !isRoot && ctx.canSelect(p) && !linked;
   const collapsed = !k && (modalState.collapsed || []).indexOf(p.id) > -1;
-  const expandable = n.children.length > 0 || (!isRoot && mem.length > 0);
+  const expandable = n.children.length > 0;
 
-  const rowCls = (poolSel ? ' sel' : (pathChecked ? ' path' : '')) + (selectable ? '' : ' dis');
+  const rowCls = (poolSel || hasPersonSel ? ' sel' : (pathChecked ? ' path' : '')) + (selectable ? '' : ' dis');
   const showCheck = selectable || poolSel || pathChecked;
+  const checkCls = poolSel ? ' on' : (hasPersonSel ? ' person' : (pathChecked ? ' half' : (showCheck ? '' : ' dis')));
+
   let html = '<div class="mt-node">' +
-    '<div class="mt-row' + rowCls + '"' + (selectable ? ' onclick="toggleSelPool(\'' + p.id + '\')"' : '') + '>' +
+    '<div class="mt-row' + rowCls + '">' +
       '<span class="mt-caret" onclick="event.stopPropagation();toggleMtNode(\'' + p.id + '\')">' + (expandable ? (collapsed ? '▸' : '▾') : '') + '</span>' +
-      '<span class="mt-check' + (poolSel ? ' on' : (pathChecked ? ' half' : (showCheck ? '' : ' dis'))) + '">' + (poolSel ? '✓' : '') + '</span>' +
-      '<span class="mt-name">' + esc(p.name) + '</span>' +
+      '<span class="mt-check' + checkCls + '"' + (selectable ? ' onclick="event.stopPropagation();toggleSelPool(\'' + p.id + '\')"' : '') + '>' +
+        (poolSel ? '✓' : (hasPersonSel ? '●' : '')) +
+      '</span>' +
+      '<span class="mt-name"' + (selectable ? ' onclick="toggleSelPool(\'' + p.id + '\')"' : '') + '>' + mtNameHtml(p) + '</span>' +
       '<span class="mt-type">' + esc(POOL_TYPES[p.type] || '') + '</span>' +
-      (linked ? '<span class="mt-tag">已在处理</span>' : '') +
+      /* 指定落实人后，人名不在此处展示（改由底部已选 chip 呈现），池行仅保留按钮与选中态 */
+      (linked ? '' : '') +
+      (selectable
+        ? '<button type="button" class="mt-assign-btn' + (hasPersonSel ? ' on' : '') + '"' +
+            ' onclick="event.stopPropagation();openOrgPicker(\'' + p.id + '\')">' +
+            (hasPersonSel ? '改指定' : '指定落实人') +
+          '</button>'
+        : '') +
     '</div>';
-  html += (collapsed && !isRoot ? '' : '<div class="mt-children">' + personHtml + childHtml + '</div>');
+
+  html += (collapsed && !isRoot ? '' : '<div class="mt-children">' + childHtml + '</div>');
   html += '</div>';
   return { html: html, hit: hit, keep: true };
+}
+
+/* 向上找到所在分管线的分管池：流转范围以分管线为边界 */
+function execAncestorOf(pool) {
+  let cur = pool;
+  while (cur) {
+    if (cur.type === 'exec') return cur;
+    cur = cur.parentId ? poolById(cur.parentId) : null;
+  }
+  return null;
+}
+
+/* 统计树中实际可选的池数量：为 0 时提示原因，避免弹窗看起来是死的 */
+function countSelectablePools(n, ctx, isRoot) {
+  if (!n) return 0;
+  let c = (!isRoot && ctx.canSelect(n.pool) && ctx.linkedIds.indexOf(n.pool.id) === -1) ? 1 : 0;
+  n.children.forEach((ch) => { c += countSelectablePools(ch, ctx, false); });
+  return c;
 }
 
 function renderModal() {
@@ -838,14 +1308,14 @@ function renderModal() {
     return;
   }
 
-  /* 评论提交二选一：标记已解决 / 流转 */
+  /* 评论提交二选一：结束处理 / 流转 */
   if (modalState.mode === 'submitChoice') {
     const link = linkById(modalState.linkId);
     const canResolve = canConfirmHandler(curUser(), m, link);
     const canFwd = canForward(curUser(), m, link);
     document.getElementById('modal').innerHTML =
       '<div class="choice-list">' +
-        '<div class="choice-row' + (canResolve ? '' : ' dis') + '"' + (canResolve ? ' onclick="submitEnd()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并标记为已解决</span></div>' +
+        '<div class="choice-row' + (canResolve ? '' : ' dis') + '"' + (canResolve ? ' onclick="submitEnd()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并结束处理</span></div>' +
         '<div class="choice-row' + (canFwd ? '' : ' dis') + '"' + (canFwd ? ' onclick="submitForward()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并流转</span></div>' +
       '</div>' +
       (canResolve || canFwd ? '' : '<div class="form-hint" style="margin-top:8px">当前信息暂无可执行的处理操作</div>');
@@ -854,39 +1324,64 @@ function renderModal() {
 
   const kw = (modalState.kw || '').trim();
   const linkedIds = linksOf(m.id).map((l) => l.poolId);
-  let title, rootNode, ctx;
+  /* 分发与流转共用同一棵公司树、同一套行渲染与底部选中区，仅可选范围与标题文案不同 */
+  const roots = poolTree();
+  const rootNode = roots.find((x) => x.pool.type === 'company') || roots[0];
+  let title, ctx;
   if (modalState.mode === 'dispatch') {
     title = '分发到目标池';
-    const roots = poolTree();
-    rootNode = roots.find((x) => x.pool.type === 'company') || roots[0];
     ctx = { linkedIds: linkedIds, canSelect: (p) => p.type !== 'company' };
   } else {
     const fromLink = linkById(modalState.fromLinkId);
     const fromPool = poolById(fromLink.poolId);
-    title = '从 ' + fromPool.name + ' 流转';
-    rootNode = poolNodeOf(fromPool.id);
-    const line = execLinePoolIds(fromPool.id);
+    title = '流转到目标池';
+    /* 流转范围＝本池所在分管线内的部门池 / 小组池（含平级），排除本池自身 */
+    const execRoot = execAncestorOf(fromPool);
+    const line = execRoot ? execLinePoolIds(execRoot.id) : [fromPool.id];
     ctx = {
       linkedIds: linkedIds,
-      canSelect: (p) => {
-        if (fromPool.type === 'exec') {
-          return line.includes(p.id) && p.id !== fromPool.id && (p.type === 'dept' || p.type === 'group');
-        }
-        if (fromPool.type === 'dept') return p.type === 'group' && p.parentId === fromPool.id;
-        return false;
-      }
+      canSelect: (p) => p.id !== fromPool.id && (p.type === 'dept' || p.type === 'group') && line.includes(p.id)
     };
   }
-  const built = selNode(rootNode, ctx, true, kw);
+  /* 去掉公司总池根节点包裹：从各分管池（高管）层级直接铺开 */
+  const listInner = (rootNode.children || []).map((c) => selNode(c, ctx, false, kw).html).join('');
+  const noTargetTip = countSelectablePools(rootNode, ctx, true) === 0
+    ? '<div class="form-hint" style="margin:0 0 8px">暂无可选目标池：同分管线内的池均已在处理，或架构中尚未建下级池</div>'
+    : '';
   const listHtml = '<div class="modal-list">' +
-    (built.html || '<div class="lock-tip">没有匹配的可选池或人员</div>') + '</div>';
-  const nSel = resolveSelTargets().length;
+    (listInner || '<div class="lock-tip">没有匹配的可选池或人员</div>') + '</div>';
+  const targets = resolveSelTargets();
+  /* 投递池与落实人分组展示、分别计数：直投人按 handler 人数逐个计 */
+  const poolTargets = targets.filter((t) => !(t.assignMode === 'person' && t.handlerId));
+  const personChips = [];
+  targets.forEach((t) => {
+    if (t.assignMode === 'person' && t.handlerId) {
+      (Array.isArray(t.handlerId) ? t.handlerId : [t.handlerId]).forEach((uid) => personChips.push({ uid: uid, poolId: t.poolId }));
+    }
+  });
+  const poolChipsHtml = poolTargets.map((t) =>
+    '<span class="mt-chip">' + esc(poolName(t.poolId)) +
+      '<b onclick="removeSelTarget(\'' + t.key + '\')">×</b></span>').join('');
+  const personChipsHtml = personChips.map((c) =>
+    '<span class="mt-chip person">' + esc(userName(c.uid)) +
+      '<b onclick="removeSelTarget(\'' + 'pers:' + c.poolId + '|' + c.uid + '\')">×</b></span>').join('');
+  const chipsHtml = (poolTargets.length || personChips.length)
+    ? '<div class="mt-chips">' +
+        (poolTargets.length
+          ? '<div class="mt-chips-group"><span class="mt-chips-label">投递池 · ' + poolTargets.length + '</span>' + poolChipsHtml + '</div>'
+          : '') +
+        (personChips.length
+          ? '<div class="mt-chips-group"><span class="mt-chips-label">落实人 · ' + personChips.length + ' 人</span>' + personChipsHtml + '</div>'
+          : '') +
+      '</div>'
+    : '';
   document.getElementById('modal').innerHTML =
-    '<h3>' + esc(title) + '<span style="font-size:12px;color:#9aa3b5;font-weight:400;margin-left:8px">' + m.no + '（编号不变，可同时进入多个池）</span></h3>' +
+    '<h3>' + esc(title) + '</h3>' +
     '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索池名称 / 人员" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
+    noTargetTip +
     listHtml +
+    chipsHtml +
     '<div class="modal-actions">' +
-      '<span class="mt-sel-count">已选 ' + nSel + ' 个目标</span>' +
       '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
       '<button class="btn" onclick="confirmModal()">确定</button>' +
     '</div>';
@@ -908,6 +1403,12 @@ window.creatorConfirm = (msgId, state) => {
   const r = setCreatorConfirm(msgId, state);
   if (!r.ok) { toast(r.msg); return; }
   toast(state === 'resolved' ? '已确认，消息已解决' : '已标记为未解决');
+  render();
+};
+window.creatorResolveReply = (msgId, replyId) => {
+  const result = resolveMessage(msgId, replyId);
+  if (!result.ok) { toast(result.msg); return; }
+  toast('已将该回复标记为解决方案');
   render();
 };
 window.cancelMsg = (msgId) => {
@@ -960,6 +1461,95 @@ function renderCustomer(name) {
   return c360CardHtml(name);
 }
 
+function detailToolbarHtml() {
+  const backIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6"/></svg>';
+  const searchIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>';
+  return '<div class="detail-toolbar">' +
+    '<div class="detail-toolbar-inner">' +
+      '<button type="button" class="detail-back-link" onclick="goBackFromDetail()">' + backIcon + '<span>返回</span></button>' +
+      '<div class="detail-global-search">' +
+        '<button type="button" class="detail-search-toggle" aria-label="展开全局搜索" aria-expanded="false" onclick="openGlobalDetailSearch()">' + searchIcon + '</button>' +
+        '<input id="detailGlobalSearch" type="search" autocomplete="off" aria-label="全局搜索信息" ' +
+          'placeholder="搜索编号、标题、客户…" oninput="updateGlobalDetailSearch(this.value)" ' +
+          'onkeydown="detailSearchKeydown(event)" onblur="closeGlobalDetailSearch()">' +
+        '<div id="detailSearchResults" class="detail-search-results" role="listbox" hidden></div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+}
+
+window.openGlobalDetailSearch = () => {
+  const wrap = document.querySelector('.detail-global-search');
+  const input = document.getElementById('detailGlobalSearch');
+  const toggle = document.querySelector('.detail-search-toggle');
+  if (!wrap || !input) return;
+  wrap.classList.add('expanded');
+  if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => input.focus());
+};
+
+function globalDetailSearchItems(keyword) {
+  return visibleMessages()
+    .filter((m) => msgKeywordMatch(m, keyword))
+    .sort((a, b) => (b.updatedAt || b.createdAt) - (a.updatedAt || a.createdAt))
+    .slice(0, 6);
+}
+
+window.updateGlobalDetailSearch = (value) => {
+  const box = document.getElementById('detailSearchResults');
+  if (!box) return;
+  const keyword = (value || '').trim();
+  if (!keyword) { box.hidden = true; box.innerHTML = ''; return; }
+  const items = globalDetailSearchItems(keyword);
+  box.innerHTML = items.length ? items.map((m, index) =>
+    '<button type="button" class="detail-search-result" role="option" data-message-id="' + esc(m.id) + '" ' +
+      'onclick="openGlobalSearchResult(\'' + esc(m.id) + '\')">' +
+      '<span class="detail-search-result-top"><b>' + esc(m.no) + '</b><span>' + esc(m.title) + '</span></span>' +
+      '<small>' + esc(proposalTypeText(m) || m.customerName || userName(m.createdBy)) + '</small>' +
+    '</button>').join('') : '<div class="detail-search-empty">未找到相关信息</div>';
+  box.hidden = false;
+};
+
+window.closeGlobalDetailSearch = () => {
+  setTimeout(() => {
+    const box = document.getElementById('detailSearchResults');
+    const wrap = document.querySelector('.detail-global-search');
+    const input = document.getElementById('detailGlobalSearch');
+    const toggle = document.querySelector('.detail-search-toggle');
+    if (box) { box.hidden = true; box.innerHTML = ''; }
+    if (input) input.value = '';
+    if (wrap) wrap.classList.remove('expanded');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  }, 160);
+};
+
+window.openGlobalSearchResult = (id) => {
+  const target = '#/message/' + id;
+  if (location.hash === target) {
+    const box = document.getElementById('detailSearchResults');
+    const input = document.getElementById('detailGlobalSearch');
+    if (box) box.hidden = true;
+    if (input) { input.value = ''; input.blur(); }
+    return;
+  }
+  location.hash = target;
+};
+
+window.detailSearchKeydown = (event) => {
+  if (event.key === 'Escape') {
+    event.currentTarget.value = '';
+    updateGlobalDetailSearch('');
+    event.currentTarget.blur();
+    return;
+  }
+  if (event.key !== 'Enter') return;
+  const first = document.querySelector('.detail-search-result');
+  if (first) {
+    event.preventDefault();
+    openGlobalSearchResult(first.dataset.messageId);
+  }
+};
+
 /* ---------- 固定底栏（小红书式互动栏）：评论框 + 消息级点赞 + 评论数；确认/分发等主动作并入右侧 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
@@ -971,12 +1561,22 @@ function actionBarHtml(me, m) {
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
   const flowIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10"></path><path d="M12 4l3 3-3 3"></path><path d="M19 17H9"></path><path d="M12 14l-3 3 3 3"></path></svg>';
   acts.push('<button class="btn btn-sm bar-action-btn" onclick="openTagModal(\'' + m.id + '\')">' + tagIcon + '<span>标记为</span></button>');
+  if (canShareMessage(me, m)) {
+    const shareIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"></path></svg>';
+    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openSharePicker(\'' + m.id + '\')">' + shareIcon + '<span>分享</span></button>');
+  }
   if (canDispatch(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>流转</span></button>');
   } else if (forwardLink) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\', \'' + forwardLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
   } else {
-    acts.push('<button class="btn btn-sm btn-disabled bar-action-btn" disabled title="当前信息暂无可流转的下级池">' + flowIcon + '<span>流转</span></button>');
+    /* 没有可流转下级池时仍保持可点击，打开弹窗让用户选择或提示不可流转 */
+    const myLink = linksOf(m.id).find((l) => linkActive(l) && poolRole(me, l.poolId));
+    if (myLink) {
+      acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\', \'' + myLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
+    } else {
+      acts.push('<button class="btn btn-sm bar-action-btn" onclick="toast(\'当前信息暂无可流转的下级池\')">' + flowIcon + '<span>流转</span></button>');
+    }
   }
   const actions = acts.length ? '<div class="bar-actions">' + acts.join('') + '</div>' : '';
   return '<div class="action-bar-spacer"></div>' +
@@ -990,6 +1590,7 @@ function logText(l) {
     case 'created': return l.note || '创建了消息';
     case 'dispatched': return l.note || '进行了分发';
     case 'forwarded': return l.note || '进行了流转';
+    case 'shared': return l.note || '分享了消息';
     case 'reply': return '在 ' + poolName(l.poolId) + ' 回复：' + (l.note || '');
     case 'handler_confirm': {
       const n = l.note || '';
@@ -1019,6 +1620,8 @@ function singleReplyRowHtml(me, m, r) {
   const isHandlerReply = !!(link && link.isFinal && handlerOfLink(link) === r.authorId);
   const hc = isHandlerReply ? (link.handlerConfirm || { state: 'none' }) : null;
   const canOp = isHandlerReply && canConfirmHandler(me, m, link);
+  const creatorResolved = !!(m.creatorConfirm && m.creatorConfirm.state === 'resolved' && m.creatorConfirm.replyId === r.id);
+  const canCreatorResolve = me.id === m.createdBy && canResolveMessage(me, m);
   const childCount = S.replies.filter((x) => x.parentReplyId === r.id).length;
   const box = replyBoxFor === r.id
     ? '<div class="cmt-reply-box"><input id="cinput_' + r.id + '" placeholder="回复 ' + esc(au.name || '') + '">' +
@@ -1032,12 +1635,14 @@ function singleReplyRowHtml(me, m, r) {
         '<span>' + esc(ROLES[au.role] || '') + '</span>' +
         '<span>' + fmtTime(r.at) + '</span>' +
         (isHandlerReply ? '<span class="cmt-confirm-tag">落实人确认 ' + confirmBadge(hc.state) + '</span>' : '') +
+        (creatorResolved ? '<span class="badge b-resolved cmt-author-resolved">作者标记已解决</span>' : '') +
       '</div>' +
       '<div class="reply-content">' + esc(r.content) + '</div>' +
       attsHtml(r.attachments) +
       '<div class="cmt-foot">' +
         '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">' + (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0) + '</button>' +
         '<button class="like-btn" onclick="toggleCommentBox(\'' + m.id + '\',\'' + r.id + '\')">回复' + (childCount ? ' ' + childCount : '') + '</button>' +
+        (canCreatorResolve ? '<button class="btn btn-sm btn-ghost" onclick="creatorResolveReply(\'' + m.id + '\',\'' + r.id + '\')">标记解决</button>' : '') +
         (canOp ?
           '<button class="btn btn-sm' + (hc.state === 'resolved' ? '' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'resolved\')">已解决</button>' +
           '<button class="btn btn-sm' + (hc.state === 'unresolved' ? ' btn-danger' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'unresolved\')">未解决</button>' : '') +
@@ -1063,7 +1668,7 @@ function commentCardHtml(me, m, r) {
     });
   };
   walk(r.id);
-  return '<div class="card cmt">' +
+  return '<div class="cmt-thread">' +
     singleReplyRowHtml(me, m, r) +
     (nestedHtml ? '<div class="cmt-nested">' + nestedHtml + '</div>' : '') +
   '</div>';
@@ -1086,9 +1691,10 @@ function pickCommentPool(m, me) {
 
 function commentAreaHtml(me, m) {
   const replies = repliesOf(m.id);
-  return '<div class="card"><div class="card-title">回复评论<span class="sub">' + replies.length + ' 条 · 按处理时间排序 · 所有参与方可见</span></div>' +
-    (replies.length ? '' : empty('暂无回复')) + '</div>' +
-    commentThreadHtml(me, m, replies);
+  /* 标题与全部回复合入同一张卡片，回复线程之间用细线分隔 */
+  return '<div class="card"><div class="card-title">回复<span class="sub">' + replies.length + ' 条 · 按处理时间排序 · 所有参与方可见</span></div>' +
+    (replies.length ? commentThreadHtml(me, m, replies) : empty('暂无回复')) +
+  '</div>';
 }
 
 /* ---------- 消息级点赞（针对当前消息，持久化到 localStorage） ---------- */
@@ -1275,9 +1881,10 @@ window.submitCommentReply = (msgId, parentId) => {
 function renderDetail(id) {
   const me = curUser();
   const m = findMsg(id);
-  if (!m) return '<div class="card no-perm">消息不存在</div>';
+  const toolbar = detailToolbarHtml();
+  if (!m) return toolbar + '<div class="card no-perm">消息不存在</div>';
   if (!canSeeMessage(me, m)) {
-    return '<div class="card no-perm">您无权查看该消息<br>分池成员只能查看本池消息，不同分管线互不可见</div>';
+    return toolbar + '<div class="card no-perm">您无权查看该消息<br>分池成员只能查看本池消息，不同分管线互不可见</div>';
   }
   const links = linksOf(m.id);
   const srcPool = poolById(m.sourcePoolId);
@@ -1295,10 +1902,11 @@ function renderDetail(id) {
       '<span>投递：' + (m.direct ? '直投 ' + esc(srcPool ? srcPool.name : '') : '公司总池') + '</span>' +
       '<span>创建于 ' + fmtTime(m.createdAt) + '</span>' +
     '</div>' +
-    (m.sources && m.sources.length ? '<div class="detail-info-line"><span class="detail-info-label">信息来源：</span><span>' + esc(m.sources.join('、')) + '</span></div>' : '') +
+    (proposalTypes(m).length ? '<div class="detail-info-line"><span class="detail-info-label">提议类型：</span><span>' + esc(proposalTypes(m).join('、')) + '</span></div>' : '') +
     (m.customerName ? '<div class="detail-info-line"><span class="detail-info-label">客户：</span><span>' + esc(m.customerName) + '</span></div>' : '') +
-    (m.sourceOther ? '<div class="detail-info-line"><span class="detail-info-label">其他来源：</span><span>' + esc(m.sourceOther) + '</span></div>' : '') +
+    (m.sourceOther ? '<div class="detail-info-line"><span class="detail-info-label">类型说明：</span><span>' + esc(m.sourceOther) + '</span></div>' : '') +
     (pools ? '<div class="detail-info-line"><span class="detail-info-label">涉及池：</span><span>' + esc(pools) + '</span></div>' : '') +
+    ((m.sharedUserIds && m.sharedUserIds.length) ? '<div class="detail-info-line"><span class="detail-info-label">分享给了：</span><span>' + esc(m.sharedUserIds.map(userName).join('、')) + '</span></div>' : '') +
     '<div class="content-box">' + esc(m.content) + '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
@@ -1321,7 +1929,7 @@ function renderDetail(id) {
         '<div class="tl-time">' + fmtTime(l.at) + '</div></div>';
     }).join('') : empty('暂无记录')) + '</div>';
 
-  return head + comments + globalSections + actionBarHtml(me, m);
+  return toolbar + head + comments + globalSections + actionBarHtml(me, m);
 }
 
 /* ==========================================================================
@@ -1369,7 +1977,7 @@ function pmFormatOwner(pool) {
 function pmRenderNodeHtml(pool, depth, me) {
   if (!pool || pool.status === 'DELETED') return '';
   const allSubpools = S.pools || [];
-  const children = allSubpools.filter((p) => p.parentId === pool.id && p.status !== 'DELETED');
+  const children = sortPoolsByPoolOrder(allSubpools.filter((p) => p.parentId === pool.id && p.status !== 'DELETED'));
   const hasChildren = children.length > 0;
   const isCollapsed = !!pmState.collapsedMap[pool.id];
 
@@ -2033,7 +2641,7 @@ function renderPools() {
   const root = userRootPool(me);
 
   // 如果普通员工没有所属管理根节点
-  if (!root) {
+  if (!root || !canAccessPoolManage(me)) {
     return '<div class="card empty" style="max-width: 640px; margin: 40px auto; padding: 32px 24px;">' +
       '<div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1f2430;">您当前身份为普通员工，暂无池管理权限</div>' +
       '<div style="font-size: 13px; color: #667085; max-width: 480px; margin: 0 auto 20px; line-height: 1.6;">' +

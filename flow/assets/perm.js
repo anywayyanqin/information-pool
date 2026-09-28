@@ -9,7 +9,7 @@ const IDENTITY_KEY = 'flow_identity';
 const IDENTITY_CHOICES = [
   { id: 'u_qy',  label: '总池分发人（李倩影）' },
   { id: 'u_wjx', label: '分管人（王冀湘·研究所）' },
-  { id: 'u_wyx', label: '分管人（闻勇翔·机构业务）' },
+  { id: 'u_wyx', label: '分管人（闻勇翔·产业服务）' },
   { id: 'u_zm',  label: '部门负责人（宏观部·周明）' },
   { id: 'u_ls',  label: '组负责人（华东组·李四）' },
   { id: 'u_zs',  label: '普通员工（张三）' }
@@ -59,7 +59,9 @@ function userRootPool(u) {
 }
 
 function canAccessPoolManage(u) {
-  return !!userRootPool(u);
+  if (!u) return false;
+  if (isAdmin(u) || isDispatcher(u) || isExec(u) || u.role === 'deptAdmin') return true;
+  return String(u.title || '').includes('负责人');
 }
 
 /* 以 rootPool 为顶点的下级子树（包含 rootPool 自身，只向下，向上不可见） */
@@ -72,7 +74,7 @@ function getPoolSubtree(rootPoolId) {
     const p = poolById(curId);
     if (p && p.status !== 'DELETED') {
       result.push(p);
-      const children = (S && S.pools ? S.pools : []).filter((cp) => cp.parentId === curId && cp.status !== 'DELETED');
+      const children = sortPoolsByPoolOrder((S && S.pools ? S.pools : []).filter((cp) => cp.parentId === curId && cp.status !== 'DELETED'));
       children.forEach((cp) => queue.push(cp.id));
     }
   }
@@ -185,22 +187,49 @@ function myExecLinePoolIds(u) {
   return [...new Set(ids)];
 }
 
+/* 该链接的待办归属：直投人时只落在指定落实人身上，投整池时池内成员均需处理 */
+function linkTodoFor(u, l) {
+  if (l.assignMode === 'person' && l.handlerId) return l.handlerId === u.id;
+  return myPoolIds(u).includes(l.poolId);
+}
+
+/* 单个池链接对用户是否可见：
+ * 直投人（assignMode='person'）跳过池可见性配置，仅落实人与池负责人可见；
+ * 投整池则池内成员均可见。 */
+function linkVisibleTo(u, l) {
+  const pool = poolById(l.poolId);
+  if (!pool) return false;
+  if (l.assignMode === 'person' && l.handlerId) {
+    return l.handlerId === u.id || pool.ownerIds.includes(u.id);
+  }
+  return pool.ownerIds.includes(u.id) || pool.memberIds.includes(u.id);
+}
+
 /* 消息对当前用户是否可见：
- * 管理员全部；提出人看本人；总池分发人看经过公司总池的；
+ * 管理员全部；提出人看本人；总池分发人看全部；
  * 分管高管看本线（本分管池及下属部门/小组池）相关；
- * 普通成员看本池相关。不同分管线互不可见。 */
+ * 普通成员看本池相关（直投人时仅落实人与负责人）。不同分管线互不可见。 */
 function canSeeMessage(u, m) {
   if (isAdmin(u)) return true;
   if (m.createdBy === u.id) return true;
-  if (isDispatcher(u)) return m.sourcePoolId === 'p_company';
+  if (isDispatcher(u)) return true;
+  /* 被分享人（轻量抄送）可查看并回复，但不因此获得处理权或待办 */
+  if ((m.sharedUserIds || []).includes(u.id)) return true;
   const links = linksOf(m.id);
-  const mine = myPoolIds(u);
-  if (links.some((l) => mine.includes(l.poolId))) return true;
+  if (links.some((l) => linkVisibleTo(u, l))) return true;
   if (isExec(u)) {
     const line = myExecLinePoolIds(u);
     return links.some((l) => line.includes(l.poolId));
   }
   return false;
+}
+
+/* 分享权：分发人、提单人、以及本消息涉及池的负责人（管理人）可将消息轻量抄送给任意人 */
+function canShareMessage(u, m) {
+  if (!canSeeMessage(u, m)) return false;
+  if (isAdmin(u) || isDispatcher(u)) return true;
+  if (m.createdBy === u.id) return true;
+  return linksOf(m.id).some((l) => poolRole(u, l.poolId) === 'owner');
 }
 
 /* 当前用户在某个池内的身份 */
@@ -217,14 +246,15 @@ function canSeeGlobal(u, m) {
   return isAdmin(u) || m.createdBy === u.id || (isDispatcher(u) && m.sourcePoolId === 'p_company');
 }
 
-/* 当前用户可回复的池（本池成员，且链接在办） */
+/* 当前用户可回复的池（本池成员，链接在办，且该链接对本人可见） */
 function canReplyIn(u, m, poolId) {
   if (m.status === 'closed' || m.status === 'cancelled') return false;
   const link = linkOf(m.id, poolId);
-  return !!link && linkActive(link) && !!poolRole(u, poolId);
+  if (!link || !linkActive(link) || !poolRole(u, poolId)) return false;
+  return isAdmin(u) || linkVisibleTo(u, link);
 }
 
-/* 能否从某池向下流转：链接在办，且本人是该链接处理人或池负责人 */
+/* 能否从某池向下流转：链接在办；已指定落实人时限落实人与池负责人，未指定时池内成员均可 */
 function canForward(u, m, link) {
   if (m.status === 'closed' || m.status === 'cancelled') return false;
   if (!linkActive(link)) return false;
@@ -232,7 +262,9 @@ function canForward(u, m, link) {
   if (!pool || (pool.type !== 'exec' && pool.type !== 'dept')) return false;
   if (!childPools(pool.id).length) return false;
   if (isAdmin(u)) return true;
-  return handlerOfLink(link) === u.id || pool.ownerIds.includes(u.id);
+  const handlerId = handlerOfLink(link);
+  if (handlerId) return handlerId === u.id || pool.ownerIds.includes(u.id);
+  return !!poolRole(u, link.poolId);
 }
 
 /* 能否做落实人确认：最终处理池，且本人是落实人（无指定落实人时池成员均可） */
@@ -260,13 +292,12 @@ function canResolveMessage(u, m) {
 
 /* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */
 function myActiveUnsubmittedLink(u, m) {
-  const mine = myPoolIds(u);
-  return linksOf(m.id).find((l) => mine.includes(l.poolId) && linkActive(l) && !hasHandledInPool(u, m, l.poolId)) || null;
+  return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && !hasHandledInPool(u, m, l.poolId)) || null;
 }
 
+/* 分发人对任何未终结的消息均可分发/继续流转，不区分是总池进来还是直投进来 */
 function canDispatch(u, m) {
-  return isDispatcher(u) && m.sourcePoolId === 'p_company' &&
-    m.status !== 'closed' && m.status !== 'cancelled';
+  return isDispatcher(u) && m.status !== 'closed' && m.status !== 'cancelled';
 }
 function canCancel(u, m) {
   return m.createdBy === u.id && m.status !== 'closed' && m.status !== 'cancelled';
@@ -285,7 +316,6 @@ function isTodoFor(u, m) {
   if (m.createdBy === u.id) return true;
   /* 总池分发人：消息在总池待分发 */
   if (isDispatcher(u)) return m.sourcePoolId === 'p_company' && m.status === 'p_company';
-  /* 池成员：本池有在办链接且本人尚未在该池回复/结束处理 */
-  const mine = myPoolIds(u);
-  return linksOf(m.id).some((l) => mine.includes(l.poolId) && linkActive(l) && !hasHandledInPool(u, m, l.poolId));
+  /* 池成员：本池有在办链接且待办归属本人，且本人尚未在该池回复/结束处理 */
+  return linksOf(m.id).some((l) => linkTodoFor(u, l) && linkActive(l) && !hasHandledInPool(u, m, l.poolId));
 }

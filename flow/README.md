@@ -58,7 +58,7 @@ flow/
 └── README.md
 ```
 
-页面（hash 路由）：`#/workbench` 工作台（含分发）、`#/new` 我要填报、`#/message/:id` 消息详情、`#/customer/:name` 客户信息、`#/pools` 池管理（仅总池分发人）。通知中心已下线，企业微信 Mock 通知仅保留在数据层（store.js → sendWeComNotification）。
+页面（hash 路由）：`#/home` 信息广场（只展示当前身份可见内容）、`#/workbench` 工作台（含分发、筛选和 Excel 导出）、`#/new` 我要填报、`#/notifications` 消息中心、`#/mine` 我的互动、`#/message/:id` 消息详情、`#/customer/:name` 客户信息、`#/pools` 池管理（池负责人/管理角色）。底部主导航在移动端常驻，填报以中央「+」按钮进入。工作台导出包含问题主表与逐条回复明细。企业微信 Mock 通知同时展示在消息中心。
 
 ## 核心流程
 
