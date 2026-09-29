@@ -4,76 +4,66 @@
  *         sendWeComNotification() 替换为企业微信应用消息 API。
  *
  * 术语约定：
- *   投递 = 新建消息时选择入口（公司总池 / 任意分管池）
- *   分发 = 公司总池 -> 分管池（仅总池分发人）
- *   流转 = 分管池 -> 部门池 -> 小组池
- *   落实人 = 最终处理池的当前处理人
+ *   投递 = 员工填报时从 8 个业务池（零售/产业/机构/买方/财富/国际/中后台/其他）中选择一个，
+ *          进池即「直投」＝自动生成一条挂在该业务池上的节点链路，收件人为池负责人+秘书，无需等分发
+ *   分发 = 总池分发人（李倩影）与在办处理人均按部门员工组织架构（org.js）把消息派给全公司的部门或个人，
+ *          勾选部门＝该部门全员收到待办，抄送消息投递业务池的负责人
+ *   汇总回复 = 处理人全部办结后由李倩影统一发布，可多次发布、可编辑，最新一条为有效汇总
+ *   处理人 = 分发目标收到的具体人员
  * ========================================================================== */
 
-const LS_KEY = 'flow_state_v5';
+const LS_KEY = 'flow_state_v6';
+const SEED_VERSION = 7;
 let S = null;
 
 /* ---------- 持久化 ---------- */
 function loadState() {
   try { S = JSON.parse(localStorage.getItem(LS_KEY)); } catch (e) { S = null; }
-  if (!S || S.v !== 5) {
+  /* v6 的数据模型（8 业务池 + 汇总回复 + 收件人链路）与旧版不兼容，直接按种子重建；
+   * 种子内容变更（业务池负责人对应关系、落实人抄送业务池负责人）时递增 SEED_VERSION。
+   * 旧键 flow_state_v5 / v6 早期数据保留不删，便于回退查看。 */
+  if (!S || S.v !== SEED_VERSION) {
     S = buildSeed();
-    S.v = 5;
+    S.v = SEED_VERSION;
     saveState();
   }
-  // 确保所有池对象的 ownerIds 和 memberIds 为有效数组
+  // 确保所有池对象的 ownerIds / secretaryIds / memberIds 为有效数组
   if (S && Array.isArray(S.pools)) {
     S.pools.forEach((p) => {
-      if (!Array.isArray(p.ownerIds)) {
-        p.ownerIds = p.ownerId ? [p.ownerId] : [];
-      }
-      if (!Array.isArray(p.memberIds)) {
-        p.memberIds = [...p.ownerIds];
-      }
+      if (!Array.isArray(p.ownerIds)) p.ownerIds = p.ownerId ? [p.ownerId] : [];
+      if (!Array.isArray(p.secretaryIds)) p.secretaryIds = [];
+      if (!Array.isArray(p.memberIds)) p.memberIds = [...p.ownerIds];
     });
   }
   if (S && Array.isArray(S.messages)) {
     S.messages.forEach((m) => { if (!Array.isArray(m.tags)) m.tags = []; });
   }
-  /* 演示数据增量补齐：保留已有 Mock 操作，仅增加新功能所需的示例。 */
-  let demoChanged = false;
-  const closedDemo = S && Array.isArray(S.messages) ? S.messages.find((m) => m.id === 'm1') : null;
-  if (closedDemo && closedDemo.creatorConfirm && closedDemo.creatorConfirm.state === 'resolved' && !closedDemo.creatorConfirm.replyId) {
-    closedDemo.creatorConfirm.replyId = 'rp1';
-    demoChanged = true;
-  }
-  if (S && Array.isArray(S.replies) && !S.replies.some((r) => r.id === 'rp_demo_wjx_like')) {
-    const demoMessage = S.messages.find((m) => m.id === 'm4');
-    S.replies.push({
-      id: 'rp_demo_wjx_like', messageId: 'm4', poolId: 'p_exec_wjx', authorId: 'u_wjx', parentReplyId: null,
-      content: '已协调策略组更新排期，新的发布时间已同步。', attachments: [],
-      at: demoMessage ? demoMessage.updatedAt + 30 * 60 * 1000 : Date.now(), likeCount: 1, likedByUserIds: ['u_ly']
-    });
-    demoChanged = true;
-  }
-  if (demoChanged) saveState();
+  if (!Array.isArray(S.summaries)) S.summaries = [];
 }
 function saveState() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 function resetState() {
   localStorage.removeItem(LS_KEY);
-  localStorage.removeItem('flow_state_v4');
   S = buildSeed();
-  S.v = 5;
+  S.v = SEED_VERSION;
   saveState();
 }
 
 /* ---------- 查询 ---------- */
-function userById(id) { return USERS.find((u) => u.id === id) || null; }
+function userById(id) {
+  return USERS.find((u) => u.id === id) || ORG_USERS_BY_ID[id] || null;
+}
 function userName(id) { const u = userById(id); return u ? u.name : '系统'; }
 function poolById(id) { return S.pools.find((p) => p.id === id) || null; }
 function poolName(id) { const p = poolById(id); return p ? p.name : id; }
 function findMsg(id) { return S.messages.find((m) => m.id === id) || null; }
 function linksOf(msgId) { return S.links.filter((l) => l.messageId === msgId); }
 function linkOf(msgId, poolId) { return S.links.find((l) => l.messageId === msgId && l.poolId === poolId) || null; }
-/* 是否已存在指向相同 (消息, 池, 落实人) 的链接：多人指定时按 handlerId 精确比对，避免重复建链 */
+/* 是否已存在指向相同 (消息, 池, 收件人集合) 的链路：避免重复分发同一目标 */
 function hasLinkForTarget(msgId, t) {
+  const next = (t.recipientIds || []).slice().sort().join(',');
   return S.links.some((l) =>
-    l.messageId === msgId && l.poolId === t.poolId && (l.handlerId || null) === (t.handlerId || null));
+    l.messageId === msgId && l.poolId === t.poolId &&
+    recipientsOf(l).slice().sort().join(',') === next);
 }
 function linkById(linkId) { return S.links.find((l) => l.id === linkId) || null; }
 function repliesOf(msgId, poolId) {
@@ -84,8 +74,59 @@ function repliesOf(msgId, poolId) {
 function logsOf(msgId) { return S.logs.filter((l) => l.messageId === msgId).sort((a, b) => a.at - b.at); }
 function childPools(poolId) { return S.pools.filter((p) => p.parentId === poolId); }
 
-/* 分管池展示顺序（统一驱动池管理树 / 新页目标池 chip / 涉及池筛选 / 分发弹窗） */
-const EXEC_POOL_ORDER = ['p_exec_zyy', 'p_exec_wjx', 'p_exec_wyx', 'p_exec_dyw', 'p_exec_lj', 'p_exec_qx', 'p_exec_swm', 'p_exec_nty', 'p_exec_fdk'];
+/* ---------- 汇总回复 ---------- */
+function summariesOf(msgId) {
+  return (S.summaries || []).filter((s) => s.messageId === msgId).sort((a, b) => a.at - b.at);
+}
+function latestSummary(msgId) {
+  const list = summariesOf(msgId);
+  return list.length ? list[list.length - 1] : null;
+}
+function summaryById(id) { return (S.summaries || []).find((s) => s.id === id) || null; }
+
+/* 节点收件人：负责人 + 秘书（如有），去重保序 */
+function nodeRecipients(pool) {
+  if (!pool) return [];
+  return [...new Set((pool.ownerIds || []).concat(pool.secretaryIds || []))];
+}
+function nodeOwnerNames(pool) { return (pool.ownerIds || []).map(userName); }
+function nodeSecretaryNames(pool) { return (pool.secretaryIds || []).map(userName); }
+
+/* 分发目标的收件人与抄送人（链路建好即为静态名单，便于可见性判定） */
+function recipientsOf(l) { return l.recipientIds || (l.handlerId ? [l.handlerId] : []); }
+function ccOf(l) { return l.ccIds || []; }
+
+/* 某池所属业务池（沿 parentId 上溯到顶层业务池）的负责人。
+ * 指定落实人时抄送这批人，落实人本人由调用方过滤。 */
+function bizOwnersOf(poolId) {
+  let cur = poolById(poolId);
+  while (cur && cur.parentId) cur = poolById(cur.parentId);
+  return cur ? (cur.ownerIds || []) : [];
+}
+
+/* ---------- 部门员工组织架构（org.js，69 部门 / 1294 人） ----------
+ * 分发选人的底库：处理人分发时按这里列出的真实部门与员工选择目标。 */
+function orgDepts() { return ORG_DEPTS; }
+function orgDeptById(id) { return ORG_DEPTS_BY_ID[id] || null; }
+function orgDeptIdOfUser(uid) { return ORG_DEPTID_BY_USER[uid] || ''; }
+function orgDeptUserIds(deptId) {
+  const d = orgDeptById(deptId);
+  return d ? d.userIds : [];
+}
+/* 按姓名/部门检索公司人员 */
+function orgSearchUsers(kw, limit) {
+  const k = (kw || '').trim().toLowerCase();
+  if (!k) return [];
+  const hit = [];
+  for (let i = 0; i < ORG_USERS.length && hit.length < (limit || 60); i++) {
+    const u = ORG_USERS[i];
+    if ((u.name || '').toLowerCase().includes(k) || (u.dept || '').toLowerCase().includes(k)) hit.push(u);
+  }
+  return hit;
+}
+
+/* 8 个业务池的展示顺序（统一驱动池管理树 / 填报目标池 chip / 池筛选 / 分发弹窗） */
+const BIZ_POOL_ORDER = ['p_retail', 'p_industry', 'p_inst', 'p_buy', 'p_wealth', 'p_intl', 'p_midback', 'p_other'];
 function poolTree() {
   const nodes = S.pools.map((p) => ({ pool: p, children: [] }));
   const byId = {};
@@ -95,17 +136,23 @@ function poolTree() {
     if (n.pool.parentId && byId[n.pool.parentId]) byId[n.pool.parentId].children.push(n);
     else roots.push(n);
   });
-  const idx = (id) => { const i = EXEC_POOL_ORDER.indexOf(id); return i < 0 ? EXEC_POOL_ORDER.length : i; };
+  const idx = (id) => { const i = BIZ_POOL_ORDER.indexOf(id); return i < 0 ? BIZ_POOL_ORDER.length : i; };
   nodes.forEach((n) => { if (n.children.length > 1) n.children.sort((a, b) => idx(a.pool.id) - idx(b.pool.id)); });
   roots.sort((a, b) => idx(a.pool.id) - idx(b.pool.id));
   return roots;
 }
-/* 同一父池下的子池按统一分管池顺序排序（非分管池保持原序），供池管理树等直接遍历 S.pools 的场景复用 */
+/* 同一父池下的子池按统一顺序排序，供池管理树等直接遍历 S.pools 的场景复用 */
 function sortPoolsByPoolOrder(list) {
-  const rank = (id) => { const i = EXEC_POOL_ORDER.indexOf(id); return i < 0 ? EXEC_POOL_ORDER.length : i; };
+  const rank = (id) => {
+    const p = (S.pools || []).find((x) => x.id === id);
+    if (p && p.type === 'biz') { const i = BIZ_POOL_ORDER.indexOf(id); return i < 0 ? BIZ_POOL_ORDER.length : i; }
+    const biz = (function walk(cur) { if (!cur) return null; if (cur.type === 'biz') return cur; return walk(cur.parentId ? poolById(cur.parentId) : null); })(poolById(id));
+    const i = biz ? BIZ_POOL_ORDER.indexOf(biz.id) : BIZ_POOL_ORDER.length;
+    return i < 0 ? BIZ_POOL_ORDER.length : i;
+  };
   return (list || []).slice().sort((a, b) => rank(a.id) - rank(b.id));
 }
-/* 按 poolTree 深度优先展平为有序池列表（公司总池→分管池按统一顺序→各自部门/小组池），供平铺下拉复用 */
+/* 按 poolTree 深度优先展平为有序池列表（8 个业务池→各自部门/小组池），供平铺下拉复用 */
 function orderedPoolsFlat() {
   const out = [];
   (function walk(nodes) {
@@ -113,22 +160,21 @@ function orderedPoolsFlat() {
   })(poolTree());
   return out;
 }
+/* 顶层业务池（填报入口） */
+function bizPools() {
+  return sortPoolsByPoolOrder(S.pools.filter((p) => p.type === 'biz' && p.status !== 'DELETED'));
+}
 
-/* 链接是否仍在办理（未办结/未流转走） */
+/* 链路是否仍在办理（未办结/未流转走） */
 function linkActive(l) { return ['pending', 'processing', 'replied'].includes(l.status); }
 
-/* 最终处理池链接列表 */
+/* 最终处理链路列表 */
 function finalLinksOf(msgId) { return linksOf(msgId).filter((l) => l.isFinal); }
 
-/* 链接的落实人（最终处理人）：
- * 直投人时返回指定人；投整池时保持待认领（返回 null）；
- * 老数据无 assignMode 时沿用旧的回退逻辑（池负责人/首位成员）。 */
+/* 链路的落实人（第一收件人，兼容旧展示逻辑） */
 function handlerOfLink(l) {
-  if (l.handlerId) return l.handlerId;
-  if (l.assignMode === 'pool') return null;
-  const p = poolById(l.poolId);
-  if (!p) return null;
-  return p.ownerIds[0] || p.memberIds[0] || null;
+  const ids = recipientsOf(l);
+  return ids.length ? ids[0] : null;
 }
 
 /* ---------- 通知（Mock 企业微信） ----------
@@ -167,59 +213,60 @@ function toggleMessageTag(msgId, tag) {
 }
 
 /* ---------- 状态机 ----------
- * 有在办链接时：按最深层级显示 待分管池处理/待部门处理/待小组处理；
- * 全部办结后：看落实人确认 + 提出人确认。 */
+ * 未分发 → 待分发；有在办链路 → 处理中；链路全部办结且尚未汇总 → 待汇总；
+ * 李倩影发布汇总后 → 已完成。 */
 function recomputeStatus(m) {
   if (m.status === 'closed' || m.status === 'cancelled') return;
   const links = linksOf(m.id);
-  if (!links.length) { m.status = 'p_company'; return; }
   const from = m.status;
-  const active = links.filter(linkActive);
-  if (active.length) {
-    if (active.some((l) => l.poolType === 'group')) m.status = 'p_group';
-    else if (active.some((l) => l.poolType === 'dept')) m.status = 'p_dept';
-    else m.status = 'p_exec';
+  if (links.some(linkActive)) {
+    m.status = 'handling';
+  } else if (latestSummary(m.id)) {
+    m.status = 'closed';
+    m.closedAt = Date.now();
+  } else if (!links.length) {
+    m.status = 'dispatch';
   } else {
-    const finals = links.filter((l) => l.isFinal);
-    const anyUnresolved =
-      finals.some((l) => l.handlerConfirm && l.handlerConfirm.state === 'unresolved');
-    const allHandlersOk = finals.length > 0 &&
-      finals.every((l) => l.handlerConfirm && l.handlerConfirm.state === 'resolved');
-    if (anyUnresolved) {
-      m.status = 'reopened';
-    } else if (allHandlersOk && m.creatorConfirm.state === 'resolved') {
-      m.status = 'closed';
-      m.closedAt = Date.now();
-    } else {
-      m.status = 'confirming';
-    }
+    m.status = 'summarize';
   }
-  if (m.status !== from) {
-    addLog(m.id, null, 'auto', {
-      from, to: m.status,
-      note: m.status === 'confirming' ? '所有分池已办结，进入待确认'
-        : m.status === 'closed' ? '落实人与提出人均确认已解决，消息关闭'
-        : '状态变更为「' + MSG_STATUS[m.status] + '」'
-    });
-    if (m.status === 'confirming') {
-      sendWeComNotification([m.createdBy], m.no + ' 所有最终落实人已确认已解决，请您进行提出人确认', m.id);
-    }
-    if (m.status === 'closed') {
-      const participants = [m.createdBy]
-        .concat(links.map((l) => l.dispatchedBy), links.map((l) => handlerOfLink(l)));
-      sendWeComNotification(participants, m.no + ' 落实人与提出人均确认已解决，消息已关闭', m.id);
-    }
+  if (m.status === from) return;
+  addLog(m.id, null, 'auto', {
+    from, to: m.status,
+    note: m.status === 'summarize' ? '所有处理人已回复完成，等待倩影汇总回复'
+      : m.status === 'closed' ? '汇总回复已发布，消息完成'
+      : '状态变更为「' + (MSG_STATUS[m.status] || m.status) + '」'
+  });
+  if (m.status === 'summarize') {
+    sendWeComNotification(dispatcherIds(), m.no + ' 全部处理人已回复完成，请您统一汇总回复', m.id, 'summary', null);
+  }
+  if (m.status === 'closed') {
+    sendWeComNotification(participantIds(m), m.no + ' 已由李倩影汇总回复，消息完成', m.id, 'summary', null);
   }
 }
 
-/* ---------- 动作：新建消息（投递） ---------- */
+/* 消息参与人：提出人 + 全部分发收件人 + 抄送人 + 分发操作人 */
+function participantIds(m) {
+  const ids = [m.createdBy];
+  linksOf(m.id).forEach((l) => {
+    ids.push.apply(ids, recipientsOf(l));
+    ids.push.apply(ids, ccOf(l));
+    if (l.dispatchedBy) ids.push(l.dispatchedBy);
+  });
+  return [...new Set(ids.filter(Boolean))];
+}
+function dispatcherIds() {
+  return USERS.filter((u) => u.role === 'dispatcher' || u.id === 'u_qy').map((u) => u.id);
+}
+
+/* ---------- 动作：新建消息（投递到 8 个业务池之一：进池即直投该池负责人+秘书，李倩影同步跟进） ---------- */
 function createMessage(data) {
   const me = curUser();
   const seq = ++S.seq;
   const now = Date.now();
   const targetPool = poolById(data.poolId);
-  /* 直投：目标为分管池或部门池时直接建链；否则落入公司总池待分发 */
-  const direct = targetPool && (targetPool.type === 'exec' || targetPool.type === 'dept');
+  if (!targetPool || targetPool.type !== 'biz') {
+    return { ok: false, msg: '请选择 8 个业务池之一作为投递池' };
+  }
   const excerpt = (data.content || '').replace(/\s+/g, ' ').slice(0, 18);
   const title = data.customerName || excerpt || '未命名消息';
   const m = {
@@ -227,167 +274,256 @@ function createMessage(data) {
     seq, no: 'M-' + String(seq).padStart(4, '0'),
     title, content: data.content, attachments: data.attachments || [],
     sources: data.sources || [], customerName: data.customerName || '', sourceOther: data.sourceOther || '',
-    createdBy: me.id, sourcePoolId: data.poolId, direct,
-    status: direct ? (targetPool.type === 'dept' ? 'p_dept' : 'p_exec') : 'p_company',
-    creatorConfirm: { state: 'none' },
+    createdBy: me.id, sourcePoolId: targetPool.id,
+    status: 'dispatch',
     createdAt: now, updatedAt: now
   };
   S.messages.unshift(m);
-  if (direct) {
+  addLog(m.id, me.id, 'created', { note: '创建消息，投递到' + targetPool.name + '池' });
+  /* 直投：进池即挂一条节点链路给业务池负责人+秘书，无需等李倩影分发；她仍可继续向下分发 */
+  const handlers = nodeRecipients(targetPool);
+  if (handlers.length) {
     S.links.push({
       id: 'lk_' + Math.random().toString(36).slice(2, 9),
-      messageId: m.id, poolId: targetPool.id, poolType: targetPool.type,
-      parentLinkId: null, parentPoolId: null,
-      status: 'pending', assignMode: 'pool', handlerId: null,
-      isFinal: true, handlerConfirm: { state: 'none' },
-      dispatchedBy: me.id, dispatchedAt: now, note: targetPool.type === 'dept' ? '直投部门池' : '直投分管池'
+      messageId: m.id, poolId: targetPool.id, poolType: targetPool.type, mode: 'node',
+      parentLinkId: null, parentPoolId: targetPool.id,
+      recipientIds: handlers, ccIds: [], status: 'pending', isFinal: true,
+      dispatchedBy: me.id, dispatchedAt: now, note: ''
     });
-    addLog(m.id, me.id, 'created', { note: '创建消息，直投 ' + targetPool.name });
-    sendWeComNotification(targetPool.ownerIds.concat(targetPool.memberIds),
-      me.name + '将新消息 ' + m.no + '《' + m.title + '》直投到 ' + targetPool.name, m.id, 'assign', me.id);
-  } else {
-    addLog(m.id, me.id, 'created', { note: '创建消息，投递到公司总池' });
-    const dispatchers = USERS.filter((u) => u.role === 'dispatcher').map((u) => u.id);
-    sendWeComNotification(dispatchers, me.name + '提交的新消息 ' + m.no + '《' + m.title + '》已进入公司总池，待分发', m.id, 'assign', me.id);
+    addLog(m.id, me.id, 'directed', { note: '直投到 ' + targetLabel(targetPool, { mode: 'node', recipientIds: handlers }) });
+    sendWeComNotification(handlers,
+      me.name + ' 提交的消息 ' + m.no + '《' + m.title + '》已直投到 ' + targetPool.name + '池，请你处理', m.id, 'assign', me.id);
   }
+  const qyIds = dispatcherIds().filter((id) => handlers.indexOf(id) === -1);
+  if (qyIds.length) {
+    sendWeComNotification(qyIds,
+      me.name + ' 提交的新消息 ' + m.no + '《' + m.title + '》已直投到 ' + targetPool.name + '池（' +
+        handlers.map(userName).join('、') + '），请跟进，必要时继续分发', m.id, 'assign', me.id);
+  }
+  recomputeStatus(m);
   saveState();
   return m;
 }
 
-/* 投递目标归一：字符串视为整池；对象时 handlerId 可为数组（多人指定，按人拆 link） */
+/* 投递目标归一：
+ *   {poolId, mode:'node'}                       → 该节点负责人 + 秘书同时收到
+ *   {poolId, mode:'person', handlerId:uid[]}     → 指定落实人，抄送其所属业务池负责人
+ *   {poolId, mode:'people', recipientIds:uid[]}  → 一组人（如整个部门）落在同一条链路，同样抄送业务池负责人 */
 function normalizeTargets(list) {
   const out = [];
   (list || []).forEach((t) => {
-    if (typeof t === 'string') { out.push({ poolId: t, assignMode: 'pool', handlerId: null }); return; }
-    const mode = t.assignMode || (t.handlerId ? 'person' : 'pool');
+    const pool = poolById(t.poolId);
+    if (!pool) return;
+    const mode = t.mode || t.assignMode || (t.handlerId ? 'person' : 'node');
+    if (mode === 'people') {
+      const ids = [...new Set((t.recipientIds || []).filter(Boolean))];
+      if (!ids.length) return;
+      const cc = (t.ccIds || bizOwnersOf(pool.id)).filter((id) => ids.indexOf(id) === -1);
+      out.push({ poolId: pool.id, mode: 'people', recipientIds: ids, ccIds: [...new Set(cc)] });
+      return;
+    }
     if (mode === 'person') {
       const ids = Array.isArray(t.handlerId) ? t.handlerId.filter(Boolean) : (t.handlerId ? [t.handlerId] : []);
-      if (ids.length === 0) { out.push({ poolId: t.poolId, assignMode: 'pool', handlerId: null }); return; }
-      ids.forEach((uid) => out.push({ poolId: t.poolId, assignMode: 'person', handlerId: uid }));
+      if (!ids.length) return;
+      ids.forEach((uid) => {
+        const cc = (t.ccIds || bizOwnersOf(pool.id)).filter((id) => id !== uid);
+        out.push({ poolId: pool.id, mode: 'person', recipientIds: [uid], ccIds: [...new Set(cc)] });
+      });
     } else {
-      out.push({ poolId: t.poolId, assignMode: 'pool', handlerId: null });
+      const ids = (t.recipientIds || nodeRecipients(pool)).filter(Boolean);
+      if (!ids.length) return;
+      out.push({ poolId: pool.id, mode: 'node', recipientIds: [...new Set(ids)], ccIds: [] });
     }
   });
   return out;
 }
 
-/* 目标描述文案：整池直接用池名，直投人附上落实人 */
+/* 目标描述文案：节点写明负责人+秘书，个人/一组人写明抄送的业务池负责人 */
 function targetLabel(pool, t) {
-  return pool.name + (t.assignMode === 'person' && t.handlerId ? '（指定 ' + userName(t.handlerId) + ' 落实）' : '');
-}
-
-/* 直投人时仅通知落实人与池负责人，投整池时通知全池 */
-function notifyTargets(pool, t) {
-  if (t.assignMode === 'person' && t.handlerId) {
-    return [...new Set([t.handlerId].concat(pool.ownerIds))];
+  const names = (t.recipientIds || []).map(userName);
+  if (t.mode === 'person' || t.mode === 'people') {
+    const cc = (t.ccIds || []).map(userName);
+    const who = names.length > 4
+      ? names.slice(0, 3).join('、') + ' 等 ' + names.length + ' 人'
+      : names.join('、');
+    return who + (cc.length ? '（抄送业务池负责人 ' + cc.join('、') + '）' : '');
   }
-  return pool.ownerIds.concat(pool.memberIds);
+  const owner = nodeOwnerNames(pool).join('、');
+  const sec = nodeSecretaryNames(pool).join('、');
+  const who = (owner ? '负责人 ' + owner : '') + (sec ? (owner ? '、' : '') + '秘书 ' + sec : '');
+  return pool.name + (who ? '（' + who + '）' : '');
 }
 
-/* ---------- 动作：分发（公司总池 -> 池树任意层级的一个或多个目标池，任一总池分发人均可直接分发） ---------- */
-function dispatchMessage(msgId, targetPoolIds, note) {
+function notifyTargets(pool, t) {
+  return (t.recipientIds || []).concat(t.ccIds || []);
+}
+
+/* ---------- 动作：分发（总池分发人按池树分发；在办处理人按部门员工组织架构分发） ---------- */
+function dispatchMessage(msgId, targets, note) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
+  if (!canDispatch(me, m)) return { ok: false, msg: '只有总池分发人与在办处理人可以分发' };
   const now = Date.now();
-  const targets = normalizeTargets(targetPoolIds);
+  const list = normalizeTargets(targets);
   const added = [];
-  targets.forEach((t) => {
-    const pid = t.poolId;
-    const pool = poolById(pid);
-    if (!pool || pool.type === 'company') return;
-    if (hasLinkForTarget(msgId, t)) return;
+  list.forEach((t) => {
+    const pool = poolById(t.poolId);
+    if (!pool || hasLinkForTarget(msgId, t)) return;
     S.links.push({
       id: 'lk_' + Math.random().toString(36).slice(2, 9),
-      messageId: msgId, poolId: pid, poolType: pool.type,
-      parentLinkId: null, parentPoolId: 'p_company',
-      status: 'pending', assignMode: t.assignMode, handlerId: t.handlerId,
-      isFinal: true, handlerConfirm: { state: 'none' },
+      messageId: msgId, poolId: pool.id, poolType: pool.type, mode: t.mode,
+      parentLinkId: null, parentPoolId: m.sourcePoolId,
+      recipientIds: t.recipientIds, ccIds: t.ccIds || [],
+      status: 'pending', isFinal: true,
       dispatchedBy: me.id, dispatchedAt: now, note: note || ''
     });
     added.push({ pool: pool, t: t });
   });
-  if (!added.length) return { ok: false, msg: '所选目标池均已在处理列表中' };
+  if (!added.length) return { ok: false, msg: '所选目标均已在处理列表中' };
   m.updatedAt = now;
-  recomputeStatus(m);
   addLog(m.id, me.id, 'dispatched', {
-    note: '分发到 ' + added.map((x) => targetLabel(x.pool, x.t)).join('、') + (note ? '：' + note : '')
+    note: '分发到 ' + added.map((x) => targetLabel(x.pool, x.t)).join('；') + (note ? '：' + note : '')
   });
   added.forEach((x) => {
-    sendWeComNotification(notifyTargets(x.pool, x.t),
-      me.name + ' 将消息 ' + m.no + '《' + m.title + '》分发到 ' + targetLabel(x.pool, x.t), m.id, 'assign', me.id);
+    sendWeComNotification(x.t.recipientIds,
+      me.name + ' 将消息 ' + m.no + '《' + m.title + '》分发到 ' + poolName(x.pool.id) + '，请你处理', m.id, 'assign', me.id);
+    if ((x.t.ccIds || []).length) {
+      sendWeComNotification(x.t.ccIds,
+        me.name + ' 将消息 ' + m.no + '《' + m.title + '》分发给 ' + x.t.recipientIds.map(userName).join('、') + '，抄送你知悉', m.id, 'cc', me.id);
+    }
   });
-  sendWeComNotification([m.createdBy], '您的消息 ' + m.no + ' 已分发到 ' + added.length + ' 个池', m.id);
+  sendWeComNotification([m.createdBy], '您的消息 ' + m.no + ' 已分发到 ' + dispatchBrief(added), m.id, null, me.id);
+  recomputeStatus(m);
   saveState();
   return { ok: true, count: added.length };
 }
 
-/* ---------- 动作：流转（分管池 -> 本线部门池/小组池，部门池 -> 小组池） ---------- */
-function forwardMessage(msgId, fromLinkId, toPoolIds, note) {
+/* 分发去向摘要（给提出人看的：只到池/人，不含处理人中间回复） */
+function dispatchBrief(added) {
+  return added.map((x) => {
+    const people = x.t.mode === 'person' || x.t.mode === 'people';
+    if (!people) return poolName(x.pool.id);
+    const names = x.t.recipientIds.map(userName);
+    const who = names.length > 4 ? names.slice(0, 3).join('、') + ' 等 ' + names.length + ' 人' : names.join('、');
+    return poolName(x.pool.id) + '（' + who + '）';
+  }).join('、');
+}
+
+/* ---------- 动作：向下流转（仍由总池分发人执行，范围＝该节点子树） ---------- */
+function forwardMessage(msgId, fromLinkId, targets, note) {
   const me = curUser();
   const m = findMsg(msgId);
   const fromLink = linkById(fromLinkId);
   if (!m || !fromLink) return { ok: false, msg: '记录不存在' };
-  if (!linkActive(fromLink)) return { ok: false, msg: '该池已办结或已流转' };
+  if (!linkActive(fromLink)) return { ok: false, msg: '该节点已办结或已流转' };
   const fromPool = poolById(fromLink.poolId);
-  /* 可流转目标：分管池 → 本线全部部门池/小组池；部门池 → 本部门小组池 */
-  let validTarget;
-  if (fromPool.type === 'exec') {
-    const line = execLinePoolIds(fromPool.id);
-    validTarget = (pool) => line.includes(pool.id) && pool.id !== fromPool.id &&
-      (pool.type === 'dept' || pool.type === 'group');
-  } else if (fromPool.type === 'dept') {
-    validTarget = (pool) => pool.type === 'group' && pool.parentId === fromPool.id;
-  } else {
-    return { ok: false, msg: '该池不能再向下流转' };
-  }
+  const subtree = getPoolSubtree(fromPool.id).map((p) => p.id);
+  const list = normalizeTargets(targets).filter((t) => t.poolId !== fromPool.id && subtree.indexOf(t.poolId) > -1);
   const now = Date.now();
-  const targets = normalizeTargets(toPoolIds);
   const added = [];
-  targets.forEach((t) => {
-    const pid = t.poolId;
-    const pool = poolById(pid);
-    if (!pool || !validTarget(pool)) return;
-    if (hasLinkForTarget(msgId, t)) return;
+  list.forEach((t) => {
+    const pool = poolById(t.poolId);
+    if (!pool || hasLinkForTarget(msgId, t)) return;
     S.links.push({
       id: 'lk_' + Math.random().toString(36).slice(2, 9),
-      messageId: msgId, poolId: pid, poolType: pool.type,
+      messageId: msgId, poolId: pool.id, poolType: pool.type, mode: t.mode,
       parentLinkId: fromLink.id, parentPoolId: fromPool.id,
-      status: 'pending', assignMode: t.assignMode, handlerId: t.handlerId,
-      isFinal: true, handlerConfirm: { state: 'none' },
+      recipientIds: t.recipientIds, ccIds: t.ccIds || [],
+      status: 'pending', isFinal: true,
       dispatchedBy: me.id, dispatchedAt: now, note: note || ''
     });
     added.push({ pool: pool, t: t });
   });
-  if (!added.length) return { ok: false, msg: '所选下级池均已在处理列表中' };
+  if (!added.length) return { ok: false, msg: '所选下级节点均已在处理列表中' };
   fromLink.status = 'forwarded';
   fromLink.isFinal = false;
   m.updatedAt = now;
-  recomputeStatus(m);
   addLog(m.id, me.id, 'forwarded', {
     poolId: fromPool.id,
-    note: '从 ' + fromPool.name + ' 流转到 ' + added.map((x) => targetLabel(x.pool, x.t)).join('、') + (note ? '：' + note : '')
+    note: '从 ' + fromPool.name + ' 流转到 ' + added.map((x) => targetLabel(x.pool, x.t)).join('；') + (note ? '：' + note : '')
   });
   added.forEach((x) => {
-    sendWeComNotification(notifyTargets(x.pool, x.t),
-      me.name + ' 将消息 ' + m.no + '《' + m.title + '》流转到 ' + targetLabel(x.pool, x.t), m.id, 'assign', me.id);
+    sendWeComNotification(x.t.recipientIds,
+      me.name + ' 将消息 ' + m.no + '《' + m.title + '》流转到 ' + poolName(x.pool.id) + '，请你落实', m.id, 'assign', me.id);
+    if ((x.t.ccIds || []).length) {
+      sendWeComNotification(x.t.ccIds,
+        me.name + ' 将消息 ' + m.no + ' 流转到 ' + x.t.recipientIds.map(userName).join('、') + '，抄送你知悉', m.id, 'cc', me.id);
+    }
   });
-  sendWeComNotification([m.createdBy], '您的消息 ' + m.no + ' 已从 ' + fromPool.name + ' 流转到 ' + added.length + ' 个下级池', m.id);
+  sendWeComNotification([m.createdBy], '您的消息 ' + m.no + ' 已流转到 ' + dispatchBrief(added), m.id);
+  recomputeStatus(m);
   saveState();
   return { ok: true, count: added.length };
 }
 
+/* ---------- 动作：倩影汇总回复（发布 / 再编辑，最新一条为有效汇总） ---------- */
+function canManageSummary(u) { return isDispatcher(u) || isAdmin(u); }
+
+function publishSummary(msgId, content) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (!canManageSummary(me)) return { ok: false, msg: '仅总池分发人可发布汇总回复' };
+  if (m.status === 'cancelled') return { ok: false, msg: '消息已取消' };
+  const text = (content || '').trim();
+  if (!text) return { ok: false, msg: '请填写汇总回复内容' };
+  const now = Date.now();
+  const s = {
+    id: 'sm_' + Math.random().toString(36).slice(2, 9),
+    messageId: msgId, authorId: me.id, content: text,
+    at: now, updatedAt: now, edits: 0
+  };
+  S.summaries.push(s);
+  m.updatedAt = now;
+  addLog(m.id, me.id, 'summary', { note: '发布汇总回复：' + text.slice(0, 40) });
+  /* 发布汇总回复即给出最终结论：在办链路统一置为已办结，消息自动标为已解决 */
+  linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
+    link.status = 'resolved';
+    link.resolvedAt = now;
+  });
+  recomputeStatus(m);
+  saveState();
+  return { ok: true, summary: s };
+}
+
+function editSummary(summaryId, content) {
+  const me = curUser();
+  const s = summaryById(summaryId);
+  if (!s) return { ok: false, msg: '汇总回复不存在' };
+  if (!canManageSummary(me)) return { ok: false, msg: '仅总池分发人可修改汇总回复' };
+  const text = (content || '').trim();
+  if (!text) return { ok: false, msg: '请填写汇总回复内容' };
+  s.content = text;
+  s.updatedAt = Date.now();
+  s.edits = (s.edits || 0) + 1;
+  const m = findMsg(s.messageId);
+  if (m) {
+    m.updatedAt = Date.now();
+    addLog(m.id, me.id, 'summary_edit', { note: '修改汇总回复' });
+    sendWeComNotification(participantIds(m).filter((id) => id !== me.id),
+      me.name + ' 修改了 ' + m.no + ' 的汇总回复', m.id, 'summary', me.id);
+  }
+  saveState();
+  return { ok: true, summary: s };
+}
+
 /* ---------- 动作：分池回复 / 评论嵌套回复（parentReplyId 为空 = 一级评论） ---------- */
+function myLinkInPool(msgId, uid, poolId) {
+  const list = linksOf(msgId).filter((l) => l.poolId === poolId && recipientsOf(l).indexOf(uid) > -1);
+  return list.find(linkActive) || list[0] || linkOf(msgId, poolId) || null;
+}
+
 function addReply(msgId, poolId, content, attachments, parentReplyId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canSeeMessage(me, m)) return { ok: false, msg: '无权评论该消息' };
-  const link = linkOf(msgId, poolId);
+  const link = myLinkInPool(msgId, me.id, poolId);
   const parent = parentReplyId ? S.replies.find((x) => x.id === parentReplyId) : null;
   const r = {
     id: 'rp_' + Math.random().toString(36).slice(2, 9),
-    messageId: msgId, poolId, authorId: me.id,
+    messageId: msgId, poolId, linkId: link ? link.id : null, authorId: me.id,
     parentReplyId: parent ? parent.id : null,
     content, attachments: attachments || [], at: Date.now(),
     likeCount: 0, likedByUserIds: []
@@ -396,8 +532,8 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   if (link && (link.status === 'pending' || link.status === 'processing')) link.status = 'replied';
   addLog(m.id, me.id, 'reply', { poolId, note: content });
   m.updatedAt = Date.now();
-  recomputeStatus(m);
-  const notify = [m.createdBy, link && handlerOfLink(link), parent && parent.authorId].filter((id) => id && id !== me.id);
+  const notify = [m.createdBy].concat(link ? recipientsOf(link) : [], parent ? [parent.authorId] : [])
+    .filter((id) => id && id !== me.id);
   sendWeComNotification(notify, me.name + ' 回复了 ' + m.no + '《' + m.title + '》', m.id, 'reply', me.id);
   saveState();
   return { ok: true };
@@ -417,43 +553,6 @@ function shareMessage(msgId, userIds) {
   sendWeComNotification(ids, userName(me.id) + ' 与你分享了 ' + m.no + '：' + m.title, m.id, 'share', me.id);
   saveState();
   return { ok: true, count: ids.length };
-}
-
-/* ---------- 动作：落实人确认（仅最终处理池落实人） ---------- */
-function setHandlerConfirm(msgId, linkId, state, note) {
-  const me = curUser();
-  const m = findMsg(msgId);
-  const link = linkById(linkId);
-  if (!m || !link || !link.isFinal) return { ok: false, msg: '记录不存在或该池不是最终处理池' };
-  if (m.status === 'closed' || m.status === 'cancelled') return { ok: false, msg: '消息已终结' };
-  const now = Date.now();
-  link.handlerConfirm = { state, by: me.id, at: now, note: note || '' };
-  if (state === 'resolved') {
-    link.status = 'resolved';
-    link.resolvedAt = now;
-  } else if (state === 'unresolved') {
-    link.status = 'processing';
-    delete link.resolvedAt;
-  }
-  m.updatedAt = now;
-  addLog(m.id, me.id, 'handler_confirm', {
-    poolId: link.poolId,
-    note: '落实人确认：' + CONFIRM_STATE[state] + (note ? '（' + note + '）' : '')
-  });
-  if (state === 'unresolved') {
-    m.status = 'reopened';
-    addLog(m.id, null, 'auto', { note: '落实人标记未解决，消息重新打开' });
-    sendWeComNotification([m.createdBy].concat(linksOf(m.id).map((l) => l.dispatchedBy)),
-      m.no + ' 被落实人标记为「未解决」，消息重新打开', m.id);
-    saveState();
-    return { ok: true };
-  }
-  recomputeStatus(m);
-  if (m.status !== 'closed') {
-    sendWeComNotification([m.createdBy], poolName(link.poolId) + ' 落实人已确认 ' + m.no + ' 已解决', m.id);
-  }
-  saveState();
-  return { ok: true };
 }
 
 /* ---------- 动作：回复点赞（通知原回复作者） ---------- */
@@ -497,40 +596,44 @@ function toggleMsgLike(msgId, userId) {
   saveState();
 }
 
-/* ---------- 动作：提出人确认 ---------- */
-function setCreatorConfirm(msgId, state) {
+/* ---------- 动作：标记整条信息已解决（李倩影与发起人本人） ---------- */
+function resolveMessage(msgId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
-  if (m.createdBy !== me.id) return { ok: false, msg: '仅提出人可确认' };
-  if (m.status === 'closed' || m.status === 'cancelled') return { ok: false, msg: '消息已终结' };
-  m.creatorConfirm = { state, by: me.id, at: Date.now() };
-  m.updatedAt = Date.now();
-  addLog(m.id, me.id, 'creator_confirm', { note: '提出人确认：' + CONFIRM_STATE[state] });
-  recomputeStatus(m);
-  saveState();
-  return { ok: true };
-}
-
-/* ---------- 动作：发起人/分发人直接标记整条信息已解决 ---------- */
-function resolveMessage(msgId, replyId) {
-  const me = curUser();
-  const m = findMsg(msgId);
-  if (!m) return { ok: false, msg: '消息不存在' };
-  if (!canResolveMessage(me, m)) return { ok: false, msg: '已有回复后，发起人或分发人才可标记为已解决' };
+  if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人本人可以标记已解决' };
   const now = Date.now();
   linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
     link.status = 'resolved';
     link.resolvedAt = now;
-    link.handlerConfirm = { state: 'resolved', by: me.id, at: now, note: '由' + (m.createdBy === me.id ? '发起人' : '分发人') + '标记已解决' };
   });
-  m.creatorConfirm = { state: 'resolved', by: me.id, at: now, replyId: replyId || null };
   m.status = 'closed';
   m.closedAt = now;
   m.updatedAt = now;
-  addLog(m.id, me.id, 'closed', { note: (m.createdBy === me.id ? '发起人' : '分发人') + '标记信息为已解决' });
-  const participants = [m.createdBy].concat(linksOf(m.id).map((link) => link.dispatchedBy), linksOf(m.id).map((link) => handlerOfLink(link)));
-  sendWeComNotification(participants, m.no + ' 已由' + (m.createdBy === me.id ? '发起人' : '分发人') + '标记为已解决', m.id);
+  addLog(m.id, me.id, 'closed', { note: me.name + '标记信息为已解决' });
+  sendWeComNotification(participantIds(m).concat(dispatcherIds()),
+    m.no + ' 已由' + me.name + '标记为已解决', m.id);
+  saveState();
+  return { ok: true };
+}
+
+/* 把已解决的消息标回未解决：链路重新进入处理中（李倩影与发起人本人） */
+function reopenMessage(msgId) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (!canReopenMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人可以把已解决的消息标为未解决' };
+  if (m.status !== 'closed') return { ok: false, msg: '消息尚未标记已解决' };
+  const now = Date.now();
+  linksOf(msgId).filter((link) => link.isFinal).forEach((link) => {
+    link.status = 'processing';
+    delete link.resolvedAt;
+  });
+  delete m.closedAt;
+  m.status = linksOf(msgId).length ? 'handling' : 'dispatch';
+  m.updatedAt = now;
+  addLog(m.id, me.id, 'reopened', { note: me.name + '标记信息为未解决，重新进入处理' });
+  sendWeComNotification(participantIds(m), m.no + ' 已由' + me.name + '标记未解决，请相关处理人继续跟进', m.id, 'assign', me.id);
   saveState();
   return { ok: true };
 }
@@ -544,8 +647,7 @@ function cancelMessage(msgId) {
   m.status = 'cancelled';
   m.updatedAt = Date.now();
   addLog(m.id, me.id, 'cancelled', { note: '提出人取消消息' });
-  sendWeComNotification(linksOf(m.id).map((l) => handlerOfLink(l)).concat(linksOf(m.id).map((l) => l.dispatchedBy)),
-    m.no + ' 已由提出人取消', m.id);
+  sendWeComNotification(participantIds(m).concat(dispatcherIds()), m.no + ' 已由提出人取消', m.id);
   saveState();
   return { ok: true };
 }
@@ -560,8 +662,8 @@ function applyPool(data) {
     applicantId: me.id, status: 'pending', reviewBy: null, reviewAt: null
   };
   S.poolApps.unshift(app);
-  USERS.filter((u) => u.role === 'admin').forEach((a) => {
-    sendWeComNotification([a.id], me.name + ' 申请新建' + POOL_TYPES[app.poolType] + '「' + app.poolName + '」（上级：' + poolName(app.parentId) + '）', null);
+  dispatcherIds().forEach((a) => {
+    sendWeComNotification([a], me.name + ' 申请新建' + POOL_TYPES[app.poolType] + '「' + app.poolName + '」（上级：' + poolName(app.parentId) + '）', null);
   });
   saveState();
   return app;
@@ -575,11 +677,13 @@ function reviewPoolApp(appId, pass) {
   app.reviewBy = me.id;
   app.reviewAt = Date.now();
   if (pass) {
+    const parent = poolById(app.parentId);
     S.pools.push({
       id: 'p_' + Math.random().toString(36).slice(2, 9),
       name: app.poolName, type: app.poolType, parentId: app.parentId,
-      level: 3, timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE',
-      ownerIds: [app.applicantId], memberIds: [app.applicantId]
+      level: parent ? (parent.level != null ? parent.level + 1 : 1) : 0,
+      timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE',
+      ownerIds: [app.applicantId], secretaryIds: [], memberIds: [app.applicantId]
     });
   }
   sendWeComNotification([app.applicantId], '您的池申请「' + app.poolName + '」' + (pass ? '已通过，池已创建' : '被驳回'), null);
@@ -616,15 +720,15 @@ function poolMetrics(poolId, includeSub = true) {
 
   let todo = 0;
   let processing = 0;
-  let confirming = 0;
+  let summarize = 0;
   let closed = 0;
   let overdue = 0;
 
   msgs.forEach((m) => {
     if (m.status === 'closed') {
       closed++;
-    } else if (m.status === 'confirming') {
-      confirming++;
+    } else if (m.status === 'summarize') {
+      summarize++;
     } else {
       const activeLinks = linksOf(m.id).filter((l) => targetSet.has(l.poolId) && linkActive(l));
       if (activeLinks.some((l) => l.status === 'processing' || l.status === 'replied')) {
@@ -642,7 +746,7 @@ function poolMetrics(poolId, includeSub = true) {
     total: msgs.length,
     todo,
     processing,
-    confirming,
+    summarize,
     closed,
     overdue,
     hasOverdue: overdue > 0,
@@ -663,12 +767,12 @@ function getPoolRecentLogs(poolId, limit = 5) {
 function createPool(data) {
   const me = curUser();
   const parent = poolById(data.parentId);
-  if (!parent || parent.level !== 2 || !canCreateSubPool(me, parent)) {
+  if (!parent || !canCreateSubPool(me, parent)) {
     return { ok: false, msg: '只能在部门池下新建小组池' };
   }
-  const level = parent ? (parent.level != null ? parent.level + 1 : 2) : 1;
-  const poolType = level === 1 ? 'exec' : (level === 2 ? 'dept' : 'group');
-  
+  const level = (parent.level != null ? parent.level : 0) + 1;
+  const poolType = level === 1 ? 'dept' : 'group';
+
   // 支持多位负责人
   let ownerIds = [];
   if (Array.isArray(data.ownerIds)) {
@@ -676,9 +780,11 @@ function createPool(data) {
   } else if (data.ownerId) {
     ownerIds = [data.ownerId];
   }
+  const secretaryIds = Array.isArray(data.secretaryIds)
+    ? [...new Set(data.secretaryIds.filter(Boolean))] : [];
 
   let memberIds = Array.isArray(data.memberIds) ? [...data.memberIds] : [];
-  ownerIds.forEach((oid) => {
+  ownerIds.concat(secretaryIds).forEach((oid) => {
     if (!memberIds.includes(oid)) memberIds.push(oid);
   });
 
@@ -689,6 +795,7 @@ function createPool(data) {
     level,
     parentId: data.parentId || null,
     ownerIds,
+    secretaryIds,
     memberIds,
     timeoutDays: Number(data.timeoutDays) || 2,
     allowDirect: !!data.allowDirect,
@@ -719,6 +826,13 @@ function updatePool(poolId, patch) {
   }
 
   if (patch.timeoutDays != null) p.timeoutDays = Number(patch.timeoutDays) || 2;
+  if (patch.secretaryIds !== undefined) {
+    p.secretaryIds = Array.isArray(patch.secretaryIds)
+      ? [...new Set(patch.secretaryIds.filter(Boolean))] : (patch.secretaryIds ? [patch.secretaryIds] : []);
+    p.secretaryIds.forEach((sid) => {
+      if (!p.memberIds.includes(sid)) p.memberIds.push(sid);
+    });
+  }
   if (patch.allowDirect != null) p.allowDirect = !!patch.allowDirect;
   if (patch.autoAssign != null) p.autoAssign = !!patch.autoAssign;
   if (patch.status != null) p.status = patch.status;
@@ -802,44 +916,50 @@ function urgeMessage(messageId, poolId) {
   const m = findMsg(messageId);
   if (!m) return { ok: false, msg: '消息不存在' };
   const links = linksOf(messageId).filter((l) => !poolId || l.poolId === poolId);
-  const handlerIds = links.map((l) => handlerOfLink(l)).filter(Boolean);
-  sendWeComNotification(handlerIds, '【催办提醒】' + me.name + ' 对消息 ' + m.no + '《' + m.title + '》进行了催办，请尽快办理。', m.id);
+  const to = [];
+  links.filter(linkActive).forEach((l) => { to.push.apply(to, recipientsOf(l)); });
+  sendWeComNotification(to, '【催办提醒】' + me.name + ' 对消息 ' + m.no + '《' + m.title + '》进行了催办，请尽快办理。', m.id);
   addLog(m.id, me.id, 'urge', { note: '催办消息，提醒处理人尽快办理' });
   saveState();
   return { ok: true };
 }
 
-/* 转派操作 */
+/* 转派操作：把某条链路的收件人改为指定落实人，并抄送其所属业务池负责人 */
 function transferMessage(messageId, fromPoolId, toPoolId, toUserId, note) {
   const me = curUser();
   const m = findMsg(messageId);
   if (!m) return { ok: false, msg: '消息不存在' };
   const targetPool = poolById(toPoolId);
   if (!targetPool) return { ok: false, msg: '目标池不存在' };
+  const recipientIds = toUserId ? [toUserId] : nodeRecipients(targetPool);
+  const ccIds = toUserId ? bizOwnersOf(toPoolId).filter((id) => id !== toUserId) : [];
 
   let link = linkOf(messageId, fromPoolId);
   if (link) {
     link.poolId = toPoolId;
     link.poolType = targetPool.type;
-    link.handlerId = toUserId || targetPool.ownerIds[0] || null;
+    link.mode = toUserId ? 'person' : 'node';
+    link.recipientIds = recipientIds;
+    link.ccIds = ccIds;
     link.status = 'pending';
   } else {
     link = {
       id: 'lk_' + Math.random().toString(36).slice(2, 9),
       messageId, poolId: toPoolId, poolType: targetPool.type,
       parentLinkId: null, parentPoolId: fromPoolId,
-      status: 'pending', handlerId: toUserId || targetPool.ownerIds[0] || null,
-      isFinal: true, handlerConfirm: { state: 'none' },
+      status: 'pending', mode: toUserId ? 'person' : 'node',
+      recipientIds, ccIds, isFinal: true,
       dispatchedBy: me.id, dispatchedAt: Date.now(), note: note || '转派'
     };
     S.links.push(link);
   }
+  recomputeStatus(m);
   addLog(m.id, me.id, 'transfer', {
     note: '转派到 ' + targetPool.name + (toUserId ? '（' + userName(toUserId) + '）' : '') + (note ? '：' + note : '')
   });
-  if (toUserId) {
-    sendWeComNotification([toUserId], me.name + '将消息 ' + m.no + '《' + m.title + '》转派给你处理', m.id, 'assign', me.id);
-  }
+  sendWeComNotification(recipientIds.concat(ccIds),
+    me.name + '将消息 ' + m.no + '《' + m.title + '》转派到 ' + targetPool.name +
+    (toUserId ? '（' + userName(toUserId) + '落实）' : ''), m.id, 'assign', me.id);
   saveState();
   return { ok: true };
 }

@@ -136,7 +136,7 @@ body.detail-route .action-bar-spacer { height: 96px; }
 .tag-choice {
   width: 100%; border: 1px solid #e4e7ec; border-radius: 10px; background: #fff;
   padding: 12px 14px; display: flex; align-items: center; justify-content: space-between;
-  color: #344054; font-size: 14px; text-align: left;
+  color: #344054; font-size: 14px; text-align: left; cursor: pointer;
 }
 .tag-choice.on { border-color: #84adff; background: #f5f8ff; color: #175cd3; }
 .tag-choice i { color: #2f6bff; font-size: 11px; font-style: normal; }
@@ -159,6 +159,8 @@ body.detail-route .action-bar-spacer { height: 96px; }
 .b-todo       { background: #fff4e6; color: #fa8c16; }
 .b-done       { background: #e9efff; color: #2f6bff; }
 .b-dispatch   { background: #fff7e6; color: #fa8c16; }
+.b-handling   { background: #f0ebff; color: #7b61ff; }
+.b-summarize  { background: #e9efff; color: #2f6bff; }
 .b-ended      { background: #e8f7ef; color: #1faa5c; }
 .b-mine       { background: #f0ebff; color: #7b61ff; }
 
@@ -449,6 +451,24 @@ body.detail-route .action-bar-spacer { height: 96px; }
 .msg-desc { font-size: 13px; color: #2b3346; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty { text-align: center; color: #9aa3b5; padding: 46px 0; font-size: 13px; }
 
+/* ---------- 工作台动态表格（卡片列表的 PC 表格形态） ---------- */
+#msgList { overflow-x: auto; }
+.wb-table { width: 100%; min-width: 860px; border-collapse: collapse; background: #fff; font-size: 13px; }
+.wb-table th {
+  text-align: left; padding: 10px 12px; color: #9aa3b5; font-weight: 500; font-size: 12px;
+  white-space: nowrap; background: #f8f9fc; border-bottom: 1px solid #eceff4;
+}
+.wb-table th.sortable { cursor: pointer; user-select: none; }
+.wb-table th.sortable:hover { color: #2f6bff; }
+.wb-table th.on { color: #2f6bff; }
+.wb-table td { padding: 12px; border-bottom: 1px solid #f2f4f8; vertical-align: middle; }
+.wb-table tbody tr { cursor: pointer; }
+.wb-table tbody tr:hover { background: #f5f8ff; }
+.wb-table .t-no { color: #2f6bff; font-weight: 700; white-space: nowrap; }
+.wb-table .t-time { white-space: nowrap; color: #b3bacb; font-size: 12px; }
+.wb-table .t-desc { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #2b3346; }
+.wb-table .t-tags { max-width: 180px; }
+
 /* ---------- 按钮 ---------- */
 .btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -657,6 +677,10 @@ body.detail-route .action-bar-spacer { height: 96px; }
 .mt-row.sel .mt-name-sub { color: rgba(255,255,255,.72); }
 .mt-row.path .mt-name-sub { color: #7e9be6; }
 .mt-children { margin-left: 16px; }
+/* 处理人分发：部门下的员工行比部门行小一档，选中用浅蓝底而非深色整行 */
+.mt-person-row { padding-top: 4px; padding-bottom: 4px; }
+.mt-person-row .mt-name-main { font-size: 12.5px; }
+.mt-person-row.sel { background: #eef3ff; color: #2f6bff; }
 /* 行内「指定落实人」按钮 */
 .mt-assign-btn {
   margin-left: auto; flex-shrink: 0; height: 22px; padding: 0 8px;
@@ -953,8 +977,7 @@ body.detail-route .action-bar-spacer { height: 96px; }
 
 .pm-node-owner {
   font-size: 11px; color: #475467; background: #f2f4f7; padding: 1px 6px;
-  border-radius: 4px; flex-shrink: 0; white-space: nowrap; max-width: 100px;
-  overflow: hidden; text-overflow: ellipsis; line-height: 1.3;
+  border-radius: 4px; flex-shrink: 0; white-space: nowrap; line-height: 1.3;
 }
 .pm-node-owner.unassigned {
   color: #d92d20; background: #fef3f2; border: 1px solid #fee4e2; font-weight: 500;

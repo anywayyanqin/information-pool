@@ -21,14 +21,16 @@ function fmtSize(n) {
   return (n / 1048576).toFixed(1) + ' MB';
 }
 function badge(status) { return '<span class="badge b-' + status + '">' + (MSG_STATUS[status] || status) + '</span>'; }
-function confirmBadge(state) { return '<span class="badge b-' + state + '">' + CONFIRM_STATE[state] + '</span>'; }
 
-/* 流程是否已结束（所有处理人处理完）：confirming/closed/cancelled 均属已结束 */
-function isEnded(m) { return m.status === 'confirming' || m.status === 'closed' || m.status === 'cancelled'; }
-/* 主流程状态（相对当前身份）：待分发 / 待办 / 已办 / 已结束 */
+/* 流程是否已结束：倩影发布汇总回复后即视为结束 */
+function isEnded(m) { return m.status === 'closed' || m.status === 'cancelled'; }
+/* 主流程状态（相对当前身份）：待分发 / 待办 / 已办 / 已解决
+ * 投递即直投业务池负责人+秘书，「待分发」只留给池内无可投负责人的兜底场景 */
 function flowStatus(m, me) {
   if (isEnded(m)) return 'ended';
-  if (isDispatcher(me) && m.sourcePoolId === 'p_company' && m.status === 'p_company') return 'dispatch';
+  if (m.status === 'dispatch') return 'dispatch';
+  /* 李倩影：直投后尚无人回复的消息由她与业务池负责人共同跟进 */
+  if ((isDispatcher(me) || isAdmin(me)) && !repliesOf(m.id).length) return 'todo';
   if (myActiveUnsubmittedLink(me, m)) return 'todo';
   return 'done';
 }
@@ -83,12 +85,11 @@ function visibleMessages() {
   const me = curUser();
   return S.messages.filter((m) => canSeeMessage(me, m));
 }
-/* 消息当前是否挂在某池（公司总池 = 待分发） */
+/* 消息当前是否挂在某池：链路指向该池，或尚未分发且投递到该池 */
 function msgInPool(m, poolId) {
   if (poolId === 'all') return true;
-  const pool = poolById(poolId);
-  if (pool && pool.type === 'company') return !linksOf(m.id).length;
-  return linksOf(m.id).some((l) => l.poolId === poolId);
+  if (linksOf(m.id).some((l) => l.poolId === poolId)) return true;
+  return !linksOf(m.id).length && m.sourcePoolId === poolId;
 }
 
 /* ---------- 池树渲染（仅池管理展示用，纯展示树形结构与池名称） ---------- */
@@ -110,11 +111,13 @@ function treeHtml(nodes, opts) {
 /* ==========================================================================
  * 1. 工作台（总池分发人的分发能力直接融合在本页）
  * ========================================================================== */
-let wbTab = null;   /* null = 默认视图：总池分发人默认「待分发」，其余默认「全部」 */
+let wbTab = null;   /* null = 默认视图：总池分发人默认「待办」（直投后由她与池负责人共同跟进），其余默认「全部」 */
 let wbPool = 'all';
 let wbStatus = '';
 let wbTag = '';
 let wbKw = '';
+let wbSortKey = 'updatedAt';   /* 表格列头排序，默认按最近更新倒序 */
+let wbSortDir = -1;
 
 function wbTabs() {
   if (isDispatcher(curUser())) {
@@ -140,7 +143,7 @@ function wbTabs() {
 function effectiveWbTab() {
   const keys = wbTabs().map((t) => t.key);
   if (wbTab && keys.includes(wbTab)) return wbTab;
-  return isDispatcher(curUser()) ? 'dispatch' : 'all';
+  return isDispatcher(curUser()) ? 'todo' : 'all';
 }
 
 function wbTabCount(key) {
@@ -148,7 +151,7 @@ function wbTabCount(key) {
   let list = visibleMessages();
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
-  if (key === 'dispatch') return list.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company').length;
+  if (key === 'dispatch') return list.filter((m) => m.status === 'dispatch').length;
   if (key === 'todo') return list.filter((m) => flowStatus(m, me) === 'todo').length;
   if (key === 'done') return list.filter((m) => flowStatus(m, me) === 'done').length;
   if (key === 'ended') return list.filter((m) => flowStatus(m, me) === 'ended').length;
@@ -157,12 +160,26 @@ function wbTabCount(key) {
   return list.length;
 }
 
+/* 表格列头排序：编号/提议类型/发起人/时间/详细描述可排；状态/标签/当前处理人只是徽标展示，不参与排序 */
+const WB_SORTERS = {
+  no: (m) => m.no,
+  src: (m) => proposalTypeText(m),
+  creator: (m) => userName(m.createdBy),
+  updatedAt: (m) => m.updatedAt,
+  desc: (m) => m.content
+};
+window.setWbSort = (k) => {
+  if (wbSortKey === k) { wbSortDir = -wbSortDir; }
+  else { wbSortKey = k; wbSortDir = k === 'updatedAt' ? -1 : 1; }
+  render();
+};
+
 function wbList() {
   const me = curUser();
   const tab = effectiveWbTab();
   let list = visibleMessages();
-  /* 待分发区：仅投向公司总池、待分发的消息 */
-  if (tab === 'dispatch') list = list.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company');
+  /* 待分发区：投递即直投业务池负责人，只有池内无可投负责人时才会留在这一态 */
+  if (tab === 'dispatch') list = list.filter((m) => m.status === 'dispatch');
   /* 主流程状态（相对当前身份）：待办 / 已办 / 已结束 */
   else if (tab === 'todo') list = list.filter((m) => flowStatus(m, me) === 'todo');
   else if (tab === 'done') list = list.filter((m) => flowStatus(m, me) === 'done');
@@ -174,7 +191,14 @@ function wbList() {
   else if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
   if (wbKw) list = list.filter((m) => msgKeywordMatch(m, wbKw));
-  return list.sort((a, b) => b.updatedAt - a.updatedAt);
+  const sorter = WB_SORTERS[wbSortKey] || WB_SORTERS.updatedAt;
+  return list.sort((a, b) => {
+    const va = sorter(a), vb = sorter(b);
+    const c = (typeof va === 'number' && typeof vb === 'number')
+      ? va - vb
+      : String(va).localeCompare(String(vb), 'zh');
+    return c * wbSortDir;
+  });
 }
 
 window.setWbPool = (id) => { wbPool = id; render(); };
@@ -189,13 +213,12 @@ function wbExportTs() {
   const d = new Date(), p = (n) => (n < 10 ? '0' + n : '' + n);
   return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' + p(d.getHours()) + p(d.getMinutes());
 }
-function buildWbExportWorkbook(list) {
+function buildWbExportWorkbook(list, me) {
   const header = ['编号', '标题', '客户', '提议类型', '标签', '状态', '涉及池', '当前处理人', '发起人', '提出时间', '最近更新', '超时', '详细描述', '回复数', '完整回复记录'];
   const rows = list.map((m) => {
     const links = linksOf(m.id);
-    const actLinks = links.filter(linkActive);
-    const replies = repliesOf(m.id);
-    const handlers = [...new Set(actLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
+    const replies = visibleReplies(me, m);
+    const handlers = activeHandlerNames(m);
     const pools = [...new Set(links.map((l) => poolById(l.poolId)).filter(Boolean).map((p) => p.name))].join('、');
     const src = proposalTypeText(m);
     const replySummary = replies.map((r, index) => {
@@ -206,7 +229,7 @@ function buildWbExportWorkbook(list) {
         '：' + r.content + (atts ? '（附件：' + atts + '）' : '');
     }).join('\n');
     return [m.no, m.title, m.customerName || '—', src || '—', (m.tags || []).join('、'),
-      MSG_STATUS[m.status] || m.status, pools || '—', handlers || (actLinks.length ? '待认领' : '—'),
+      MSG_STATUS[m.status] || m.status, pools || '—', handlers || '—',
       userName(m.createdBy), fmtTime(m.createdAt), fmtTime(m.updatedAt),
       isMessageOverdue(m) ? '是' : '—', m.content, replies.length, replySummary || '—'];
   });
@@ -216,7 +239,7 @@ function buildWbExportWorkbook(list) {
   const replyHeader = ['问题编号', '问题标题', '回复序号', '回复类型', '回复对象', '回复人', '回复人角色', '所属池', '回复时间', '回复内容', '附件', '点赞数'];
   const replyRows = [];
   list.forEach((m) => {
-    repliesOf(m.id).forEach((r, index) => {
+    visibleReplies(me, m).forEach((r, index) => {
       const author = userById(r.authorId) || {};
       const parent = r.parentReplyId ? S.replies.find((x) => x.id === r.parentReplyId) : null;
       replyRows.push([
@@ -240,7 +263,7 @@ window.exportWbMessages = function() {
   if (typeof XLSX === 'undefined') { toast('Excel 组件未加载，无法导出'); return; }
   const list = wbList();
   if (!list.length) { toast('当前筛选条件下没有可导出的消息'); return; }
-  const result = buildWbExportWorkbook(list);
+  const result = buildWbExportWorkbook(list, me);
   XLSX.writeFile(result.workbook, '信息池消息导出-' + wbExportTs() + '.xlsx');
   toast('已导出 ' + list.length + ' 条消息及 ' + result.replyCount + ' 条回复');
 };
@@ -250,13 +273,22 @@ function renderListOnly() {
   if (el) el.innerHTML = wbListHtml();
 }
 
+/* 名单过长时折叠：按部门分发会有上百人，卡片与去向只展示前 3 人 */
+function peopleBrief(ids) {
+  const names = (ids || []).map(userName);
+  return names.length > 3 ? names.slice(0, 3).join('、') + ' 等 ' + names.length + ' 人' : names.join('、');
+}
+
+/* 在办链路的处理人名单（节点＝负责人+秘书，个人＝指定落实人） */
+function activeHandlerNames(m) {
+  const ids = [...new Set(linksOf(m.id).filter(linkActive).flatMap((l) => recipientsOf(l)))];
+  return peopleBrief(ids);
+}
+
 /* 工作台与池管理共用的标准信息卡片 */
 function messageListCardHtml(m, me) {
   const actLinks = linksOf(m.id).filter(linkActive);
-  const handlers = [...new Set(actLinks.map((l) => handlerOfLink(l)).filter(Boolean))]
-    .map(userName).join('、');
-  /* 投整池时未指定落实人，池内成员均可认领，显示「待认领」 */
-  const handler = handlers || (actLinks.length ? '待认领' : '—');
+  const handler = activeHandlerNames(m) || '—';
   const src = proposalTypeText(m);
 
   return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
@@ -275,11 +307,47 @@ function messageListCardHtml(m, me) {
   '</div>';
 }
 
+/* 工作台 PC 动态表格列：与卡片信息等价（不加标题列），详细描述截断一行、悬浮看全文 */
+const WB_COLS = [
+  { key: 'no', label: '编号', sort: 'no' },
+  { key: 'status', label: '状态' },
+  { key: 'src', label: '提议类型', sort: 'src' },
+  { key: 'tags', label: '标签' },
+  { key: 'handler', label: '当前处理人' },
+  { key: 'creator', label: '发起人', sort: 'creator' },
+  { key: 'updatedAt', label: '时间', sort: 'updatedAt' },
+  { key: 'desc', label: '详细描述', sort: 'desc' }
+];
+function wbTableHtml(list, me) {
+  const head = WB_COLS.map((c) => {
+    if (!c.sort) return '<th>' + c.label + '</th>';
+    const on = wbSortKey === c.sort;
+    const arrow = on ? (wbSortDir > 0 ? ' ▲' : ' ▼') : '';
+    return '<th class="sortable' + (on ? ' on' : '') + '" onclick="setWbSort(\'' + c.sort + '\')">' +
+      c.label + arrow + '</th>';
+  }).join('');
+  const rows = list.map((m) => {
+    const handler = activeHandlerNames(m) || '—';
+    const src = proposalTypeText(m);
+    return '<tr onclick="openMessage(\'' + m.id + '\')">' +
+      '<td class="t-no">' + esc(m.no) + '</td>' +
+      '<td>' + flowBadge(m, me) + '</td>' +
+      '<td>' + esc(src || '—') + '</td>' +
+      '<td class="t-tags">' + (messageTagsHtml(m) || '—') + '</td>' +
+      '<td>' + esc(isEnded(m) ? '—' : handler) + '</td>' +
+      '<td>' + esc(userName(m.createdBy)) + '</td>' +
+      '<td class="t-time">' + fmtTime(m.updatedAt) + '</td>' +
+      '<td class="t-desc" title="' + esc(m.content) + '">' + esc(m.content) + '</td>' +
+    '</tr>';
+  }).join('');
+  return '<table class="wb-table"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
+}
+
 function wbListHtml() {
   const me = curUser();
   const list = wbList();
   if (!list.length) return empty('暂无符合条件的消息');
-  return list.map((m) => messageListCardHtml(m, me)).join('');
+  return wbTableHtml(list, me);
 }
 
 function renderWorkbench() {
@@ -518,7 +586,7 @@ function renderMyInteractions() {
 /* ==========================================================================
  * 1.5. 信息池（全景信息中心与全池记录浏览）
  * ========================================================================== */
-let ipTab = 'all';     /* all, p_company, processing, confirming, closed, overdue */
+let ipTab = 'all';     /* all, dispatch, handling, summarize, closed, overdue */
 let ipPool = 'all';    /* all or specific poolId */
 let ipSource = 'all';  /* all or specific source */
 let ipKw = '';         /* 搜索关键词 */
@@ -527,10 +595,10 @@ let ipSort = 'updated';/* updated, created */
 function ipTabs() {
   return [
     { key: 'all', name: '全部信息' },
-    { key: 'p_company', name: '待总池分发' },
-    { key: 'processing', name: '在办流转中' },
-    { key: 'confirming', name: '待双确认' },
-    { key: 'closed', name: '已办结' },
+    { key: 'dispatch', name: '待分发' },
+    { key: 'handling', name: '处理中' },
+    { key: 'summarize', name: '待汇总' },
+    { key: 'closed', name: '已完成' },
     { key: 'overdue', name: '超时预警' }
   ];
 }
@@ -538,12 +606,12 @@ function ipTabs() {
 function ipList() {
   let list = visibleMessages();
 
-  if (ipTab === 'p_company') {
-    list = list.filter((m) => m.sourcePoolId === 'p_company' && m.status === 'p_company');
-  } else if (ipTab === 'processing') {
-    list = list.filter((m) => m.status === 'processing' || m.status === 'p_group' || m.status === 'p_dept' || m.status === 'p_exec');
-  } else if (ipTab === 'confirming') {
-    list = list.filter((m) => m.status === 'confirming');
+  if (ipTab === 'dispatch') {
+    list = list.filter((m) => m.status === 'dispatch');
+  } else if (ipTab === 'handling') {
+    list = list.filter((m) => m.status === 'handling');
+  } else if (ipTab === 'summarize') {
+    list = list.filter((m) => m.status === 'summarize');
   } else if (ipTab === 'closed') {
     list = list.filter((m) => m.status === 'closed');
   } else if (ipTab === 'overdue') {
@@ -586,10 +654,11 @@ function ipListHtml() {
   return list.map((m) => {
     const activeLinks = linksOf(m.id).filter(linkActive);
     const poolNames = activeLinks.map((l) => poolName(l.poolId)).filter(Boolean);
-    const poolTag = poolNames.length ? poolNames.join('、') : (m.sourcePoolId === 'p_company' && m.status === 'p_company' ? '公司总池（待分发）' : poolName(m.sourcePoolId));
+    const poolTag = poolNames.length ? poolNames.join('、')
+      : (m.status === 'dispatch' ? poolName(m.sourcePoolId) + '（待分发）' : poolName(m.sourcePoolId));
 
-    const handlerNames = [...new Set(activeLinks.map((l) => handlerOfLink(l)).filter(Boolean))].map(userName).join('、');
-    const handlers = handlerNames || (activeLinks.length ? '待认领' : '');
+    const handlerNames = activeHandlerNames(m);
+    const handlers = handlerNames || '';
     const isOverdue = isMessageOverdue(m);
     const overdueDays = m.overdueDays || (isOverdue ? 1 : 0);
 
@@ -654,7 +723,7 @@ function renderInfoPool() {
  * ========================================================================== */
 let newMsgAtts = [];
 let newSources = [];
-let newTargetPool = 'p_company';
+let newTargetPool = null;
 let newDraft = { content: '', customerName: '', sourceOther: '' };
 let newCustomerQuery = '';
 let newVoiceRecording = false;
@@ -692,19 +761,7 @@ function renderNewSources() {
     '<span class="chip' + (newSources.includes(s) ? ' on' : '') + '" onclick="toggleNewSource(\'' + s + '\')">' + esc(s) + '</span>').join('');
 }
 
-/* 高管人姓名：取分管池 owner，无则回退池名 */
-function execPersonName(p) {
-  return (p.ownerIds && p.ownerIds.length) ? userName(p.ownerIds[0]) : p.name;
-}
-/* 当前投递目标的可读描述 */
-function newTargetLabel() {
-  const p = poolById(newTargetPool);
-  if (!p) return '未选择';
-  if (p.type === 'company') return p.name;
-  if (p.type === 'exec') return execPersonName(p) + ' · 整条分管线';
-  const parent = p.parentId ? poolById(p.parentId) : null;
-  return (parent ? execPersonName(parent) + ' · ' : '') + p.name;
-}
+/* 投递目标：8 个业务池之一，进池即直投该池负责人+秘书，李倩影同步跟进 */
 window.setNewTargetPool = (poolId) => {
   captureNewDraft();
   newTargetPool = poolId;
@@ -713,16 +770,12 @@ window.setNewTargetPool = (poolId) => {
 function renderNewPools() {
   const el = document.getElementById('newPoolChips');
   if (!el) return;
-  const company = poolById('p_company');
-  /* 分管池按 poolTree 统一顺序展示；chip 仅显示人名，不再有展开面板 */
-  const roots = poolTree();
-  const companyRoot = roots.find((r) => r.pool.type === 'company') || roots[0];
-  const execs = companyRoot && companyRoot.children ? companyRoot.children.map((c) => c.pool) : [];
-  let html = '<span class="chip' + (newTargetPool === 'p_company' ? ' on' : '') + '" onclick="setNewTargetPool(\'p_company\')">' + esc(company ? company.name : '公司总池') + '</span>';
-  html += execs.map((p) =>
-    '<span class="chip' + (newTargetPool === p.id ? ' on' : '') + '" onclick="setNewTargetPool(\'' + p.id + '\')">' +
-      esc(execPersonName(p)) + '</span>').join('');
-  el.innerHTML = html;
+  el.innerHTML = bizPools().map((p) => {
+    const owner = (p.ownerIds || []).map(userName).join('、');
+    return '<span class="chip' + (newTargetPool === p.id ? ' on' : '') + '" title="' +
+      esc(owner ? '负责人 ' + owner : p.name) + '" onclick="setNewTargetPool(\'' + p.id + '\')">' +
+      esc(p.name) + '</span>';
+  }).join('');
 }
 
 function newCustomerOptionsHtml(query) {
@@ -794,6 +847,7 @@ window.submitNew = () => {
   if (newSources.includes('客需') && !newDraft.customerName) { toast('选择客需时必须填写客户名称'); return; }
   if (newSources.includes('其他') && !newDraft.sourceOther.trim()) { toast('选择其他时必须填写类型说明'); return; }
   if (!content) { toast('请填写问题描述'); return; }
+  if (!newTargetPool) { toast('请选择 1 个投递目标池'); return; }
   const m = createMessage({
     poolId: newTargetPool, content,
     sources: newSources.slice(),
@@ -801,15 +855,15 @@ window.submitNew = () => {
     sourceOther: newSources.includes('其他') ? newDraft.sourceOther.trim() : '',
     attachments: newMsgAtts.slice()
   });
+  if (!m || m.ok === false) { toast(m.msg || '提交失败'); return; }
   newMsgAtts = [];
   newSources = [];
-  newTargetPool = 'p_company';
-  newExecOpen = null;
+  newTargetPool = null;
   newDraft = { content: '', customerName: '', sourceOther: '' };
   newCustomerQuery = '';
   newVoiceRecording = false;
   const tp = poolById(m.sourcePoolId);
-  toast(m.direct ? ('已直投到 ' + (tp ? tp.name : '目标池')) : '已投递到公司总池，待分发');
+  toast('已投递到' + tp.name + '池，直投 ' + peopleBrief(nodeRecipients(tp)) + '，李倩影同步跟进');
   location.hash = '#/message/' + m.id;
 };
 
@@ -890,17 +944,13 @@ window.applyMessageTag = (msgId, tag) => {
   const m = findMsg(msgId);
   if (!m) return;
   if (tag === '已解决' || tag === '未解决') {
-    const link = linksOf(msgId).find((item) => canConfirmHandler(curUser(), m, item));
     closeModal();
-    const state = tag === '已解决' ? 'resolved' : 'unresolved';
-    if (tag === '已解决' && canResolveMessage(curUser(), m)) {
-      const result = resolveMessage(msgId);
-      if (!result.ok) { toast(result.msg); return; }
-      toast('已标记为已解决');
-      render();
-    } else if (canConfirmCreator(curUser(), m)) creatorConfirm(msgId, state);
-    else if (link) handlerConfirm(msgId, link.id, state);
-    else toast('当前无权标记为' + tag);
+    /* 两项都始终可点：已是当前状态时只提示，不重复改状态 */
+    if ((m.status === 'closed') === (tag === '已解决')) { toast('当前已是' + tag); return; }
+    const result = tag === '已解决' ? resolveMessage(msgId) : reopenMessage(msgId);
+    if (!result.ok) { toast(result.msg); return; }
+    toast('已标记为' + tag);
+    render();
     return;
   }
   const r = toggleMessageTag(msgId, tag);
@@ -911,7 +961,12 @@ window.applyMessageTag = (msgId, tag) => {
 };
 
 window.openDispatchModal = (id) => {
-  modalState = { mode: 'dispatch', msgId: id, selected: [], kw: '', collapsed: [] };
+  const m = findMsg(id);
+  modalState = {
+    mode: 'dispatch', msgId: id, selected: [], kw: '', collapsed: [],
+    anchorPoolId: m ? dispatchAnchorPoolId(curUser(), m) : null,
+    orgExpanded: []
+  };
   showModal();
 };
 window.openForwardModal = (msgId, linkId) => {
@@ -952,7 +1007,7 @@ function restoreKwFocus() {
   if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
 }
 
-/* 勾选整池（assignMode='pool'）：与同池的指定落实人互斥 */
+/* 勾选节点（负责人+秘书）：与同池的指定落实人互斥 */
 window.toggleSelPool = (pid) => {
   if (!modalState) return;
   const key = 'pool:' + pid;
@@ -978,15 +1033,13 @@ window.openOrgPicker = (pid) => {
   renderOrgPicker();
 };
 
-/* 分享：复用同一套组织架构选人弹窗，候选为全公司任何人，确定后调用 shareMessage */
+/* 分享：与分发同一套部门员工组织架构弹窗（主弹窗），勾选部门＝分享给该部门全员 */
 window.openSharePicker = (msgId) => {
   const m = findMsg(msgId);
   if (!m) return;
   if (!canShareMessage(curUser(), m)) { toast('当前身份无权分享'); return; }
-  orgPicker = { mode: 'share', msgId, poolId: null, kw: '', picked: (m.sharedUserIds || []).slice() };
-  document.getElementById('orgMask').classList.add('show');
-  document.getElementById('orgModal').classList.add('show');
-  renderOrgPicker();
+  modalState = { mode: 'share', msgId, selected: [], kw: '', collapsed: [], orgExpanded: [] };
+  showModal();
 };
 
 window.closeOrgPicker = () => {
@@ -1045,7 +1098,8 @@ window.confirmOrgPicker = () => {
   if (n) toast('已指定 ' + n + ' 位落实人');
 };
 
-/* 候选分组：本池成员单独一组置顶，其余按部门分组 */
+/* 候选分组：本池成员单独一组置顶，其余按部门分组；
+ * 输入关键字时追加「公司人员」分组，可检索部门员工组织架构里的全部 1294 名员工 */
 function orgPickerGroups() {
   if (!orgPicker) return [];
   const pool = poolById(orgPicker.poolId);
@@ -1058,12 +1112,25 @@ function orgPickerGroups() {
   const groups = [];
   const mems = memIds.map((id) => userById(id)).filter(Boolean).filter(match);
   if (mems.length) groups.push({ name: '本池成员', users: mems, own: true });
+  const listed = {};
+  memIds.forEach((id) => { listed[id] = 1; });
   USERS.filter((u) => memIds.indexOf(u.id) === -1 && match(u)).forEach((u) => {
+    listed[u.id] = 1;
     const d = u.dept || '其他人员';
     let g = groups.find((x) => x.name === d && !x.own);
     if (!g) { g = { name: d, users: [] }; groups.push(g); }
     g.users.push(u);
   });
+  if (k) {
+    orgSearchUsers(k, 80).forEach((u) => {
+      if (listed[u.id]) return;
+      listed[u.id] = 1;
+      const d = u.dept || '公司人员';
+      let g = groups.find((x) => x.name === d && !x.own);
+      if (!g) { g = { name: d, users: [] }; groups.push(g); }
+      g.users.push(u);
+    });
+  }
   return groups;
 }
 
@@ -1106,7 +1173,7 @@ function renderOrgPicker() {
     '<div class="pm-org-picker">' + groupsHtml + '</div>' +
     '<div class="hint pm-share-hint">' + (isShare
       ? '被分享人可查看该消息并回复，但不进入其待办、也不承担处理与确认义务。'
-      : '被指定的落实人将直接收到该信息的待办，并负责处理与回填结论。') + '</div>' +
+      : '被指定的落实人将直接收到该信息的待办，并负责处理与回填结论。输入姓名或部门可检索全公司员工。') + '</div>' +
     '<div class="modal-actions">' +
       '<button class="btn btn-ghost" onclick="closeOrgPicker()">取消</button>' +
       '<button class="btn" onclick="confirmOrgPicker()">' + (isShare ? '确认分享' : '确定') + '</button>' +
@@ -1135,16 +1202,30 @@ window.removeSelTarget = (key) => {
   restoreKwFocus();
 };
 
-/* 解析实际投递目标：整池与直投人两类；
- * 同一池若多人被指定则合并到 handlerId 数组，store 层按人拆分为多条 link */
+/* 解析分发目标：勾选节点＝该节点负责人+秘书同时收到；勾选个人＝本人落实并抄送其所属业务池负责人。
+ * 同一池被指定多人时合并为 handlerId 数组，store 层按人拆成多条链路。
+ * orgd:/orgp: 前缀来自处理人的组织架构分发，统一挂在本人正在处理的池下（anchorPoolId）。 */
 function resolveSelTargets() {
   const out = [];
   const done = {};
   (modalState.selected || []).forEach((k) => {
+    if (k.indexOf('orgd:') === 0) {
+      if (done[k]) return;
+      done[k] = 1;
+      const ids = orgDeptUserIds(k.slice(5));
+      if (ids.length) out.push({ poolId: modalState.anchorPoolId, mode: 'people', recipientIds: ids, key: k });
+    }
+    if (k.indexOf('orgp:') === 0) {
+      if (done[k]) return;
+      done[k] = 1;
+      out.push({ poolId: modalState.anchorPoolId, mode: 'people', recipientIds: [k.slice(5)], key: k });
+    }
+  });
+  (modalState.selected || []).forEach((k) => {
     if (k.indexOf('pool:') === 0) {
       const pid = k.slice(5);
       if (done[pid]) return;
-      out.push({ poolId: pid, assignMode: 'pool', handlerId: null, key: k });
+      out.push({ poolId: pid, mode: 'node', key: k });
       done[pid] = 1;
     }
   });
@@ -1157,7 +1238,7 @@ function resolveSelTargets() {
       done[pid] = 1;
       const ids = modalState.selected.filter((x) => x.indexOf('pers:' + pid + '|') === 0)
         .map((x) => x.slice(x.lastIndexOf('|') + 1));
-      out.push({ poolId: pid, assignMode: 'person', handlerId: ids, key: 'pers:' + pid + ':*' });
+      out.push({ poolId: pid, mode: 'person', handlerId: ids, key: 'pers:' + pid + ':*' });
     }
   });
   return out;
@@ -1165,35 +1246,27 @@ function resolveSelTargets() {
 
 window.confirmModal = () => {
   if (!modalState) return;
+  if (modalState.mode === 'share') {
+    const r = shareMessage(modalState.msgId, orgPickedUserIds());
+    if (!r.ok) { toast(r.msg); return; }
+    closeModal();
+    toast('已分享给 ' + r.count + ' 人，对方可查看并回复');
+    render();
+    return;
+  }
   const targets = resolveSelTargets();
-  if (!targets.length) { toast('请至少选择一个目标池或人员'); return; }
-  const r = modalState.mode === 'dispatch'
+  if (!targets.length) { toast('请至少选择一个节点或人员'); return; }
+  const isDsp = modalState.mode === 'dispatch';
+  const r = isDsp
     ? dispatchMessage(modalState.msgId, targets, '')
     : forwardMessage(modalState.msgId, modalState.fromLinkId, targets, '');
   if (!r.ok) { toast(r.msg); return; }
-  const isDsp = modalState.mode === 'dispatch';
   closeModal();
-  toast(isDsp ? '已分发到 ' + r.count + ' 个池' : '已流转到 ' + r.count + ' 个池');
+  toast((isDsp ? '已分发到 ' : '已流转到 ') + r.count + ' 个目标，处理人已收到待办');
   render();
 };
 
-/* 池人员评论提交后二选一：结束处理 / 流转（内容来自底部评论面板）；
- * 结束处理＝本池落实完毕，仍需提出人确认后整条信息才关闭 */
-window.submitEnd = () => {
-  if (!modalState) return;
-  const st = modalState;
-  const m = findMsg(st.msgId);
-  const link = linkById(st.linkId);
-  if (!canConfirmHandler(curUser(), m, link)) { toast('当前无权结束处理'); return; }
-  const r = addReply(st.msgId, st.poolId, st.content, st.atts || []);
-  if (!r.ok) { toast(r.msg); return; }
-  const result = setHandlerConfirm(st.msgId, st.linkId, 'resolved', '');
-  if (!result.ok) { toast(result.msg); return; }
-  closeModal();
-  toast(m.status === 'confirming' ? '已提交，本池标记已办，等待提交人确认'
-    : m.status === 'closed' ? '双方均确认，消息已解决' : '已提交，本池标记已办');
-  render();
-};
+/* 处理人评论后可直接流转到下级节点（是否办结由李倩影判断并汇总回复） */
 window.submitForward = () => {
   if (!modalState) return;
   const st = modalState;
@@ -1204,16 +1277,18 @@ window.submitForward = () => {
   renderModal();
 };
 
-/* 选择树节点渲染：只渲染池行，成员不再展开为兄弟节点，
- * 改为通过行内「指定落实人」按钮展开内联单选面板。
+/* 选择树节点渲染：只渲染池行，具体人员通过行内「指定落实人」按钮在组织架构弹窗中勾选。
  * 返回 {html, hit, keep}：hit = 子树内是否有显式选中（下级选中时上级呈半选态）；
  * keep = 搜索时该节点是否可见。 */
-/* 池行名称：分管池以人名为主、部门/小组池以池名为主（不再展示分管线/负责人副行注解） */
+/* 池行名称：主行池名，副行展示负责人与秘书（如有） */
 function mtNameHtml(p) {
-  const main = p.type === 'exec' ? execPersonName(p) : p.name;
-  return '<span class="mt-name-main">' + esc(main) + '</span>';
+  const owner = nodeOwnerNames(p).join('、');
+  const sec = nodeSecretaryNames(p).join('、');
+  const sub = [owner ? '负责人 ' + owner : '', sec ? '秘书 ' + sec : ''].filter(Boolean).join(' · ');
+  return '<span class="mt-name-main">' + esc(p.name) + '</span>' +
+    (sub ? '<span class="mt-name-sub">' + esc(sub) + '</span>' : '');
 }
-function selNode(n, ctx, isRoot, kw) {
+function selNode(n, ctx, kw) {
   const p = n.pool;
   const k = (kw || '').trim().toLowerCase();
   const sel = modalState.selected;
@@ -1226,22 +1301,24 @@ function selNode(n, ctx, isRoot, kw) {
     .map((k2) => k2.slice(k2.lastIndexOf('|') + 1));
   const hasPersonSel = handlerIds.length > 0;
 
-  const kids = n.children.map((c) => selNode(c, ctx, false, kw));
+  const kids = n.children.map((c) => selNode(c, ctx, kw));
   const childHtml = kids.map((x) => x.html).join('');
   const childHit = kids.some((x) => x.hit);
   const childKept = kids.some((x) => x.keep);
 
-  /* 搜索命中本池任一成员时，该池行保留并自动展开落实人面板 */
-  const memberHits = (!isRoot && k) ? mem.filter((uid) => userName(uid).toLowerCase().includes(k)) : [];
+  /* 搜索命中本池任一人员（含负责人/秘书）时，该池行保留 */
+  const memberHits = k ? [...new Set(mem.concat(nodeRecipients(p)))]
+    .filter((uid) => userName(uid).toLowerCase().includes(k)) : [];
 
   const hit = poolSel || hasPersonSel || childHit;
   const poolNameMatch = k ? p.name.toLowerCase().includes(k) : true;
-  const keep = !k || poolNameMatch || poolSel || hasPersonSel || memberHits.length > 0 || childKept;
+  const ownerMatch = k ? memberHits.length > 0 : false;
+  const keep = !k || poolNameMatch || ownerMatch || poolSel || hasPersonSel || childKept;
   if (!keep) return { html: '', hit: hit, keep: false };
 
   const pathChecked = hit && !poolSel;
   const linked = ctx.linkedIds.indexOf(p.id) > -1;
-  const selectable = !isRoot && ctx.canSelect(p) && !linked;
+  const selectable = ctx.canSelect(p) && !linked;
   const collapsed = !k && (modalState.collapsed || []).indexOf(p.id) > -1;
   const expandable = n.children.length > 0;
 
@@ -1257,118 +1334,309 @@ function selNode(n, ctx, isRoot, kw) {
       '</span>' +
       '<span class="mt-name"' + (selectable ? ' onclick="toggleSelPool(\'' + p.id + '\')"' : '') + '>' + mtNameHtml(p) + '</span>' +
       '<span class="mt-type">' + esc(POOL_TYPES[p.type] || '') + '</span>' +
-      /* 指定落实人后，人名不在此处展示（改由底部已选 chip 呈现），池行仅保留按钮与选中态 */
-      (linked ? '' : '') +
+      (linked ? '<span class="mt-type">已在处理列表</span>' : '') +
       (selectable
         ? '<button type="button" class="mt-assign-btn' + (hasPersonSel ? ' on' : '') + '"' +
+            ' title="指定具体人员落实，抄送其所属业务池负责人"' +
             ' onclick="event.stopPropagation();openOrgPicker(\'' + p.id + '\')">' +
             (hasPersonSel ? '改指定' : '指定落实人') +
           '</button>'
         : '') +
     '</div>';
 
-  html += (collapsed && !isRoot ? '' : '<div class="mt-children">' + childHtml + '</div>');
+  html += (collapsed ? '' : '<div class="mt-children">' + childHtml + '</div>');
   html += '</div>';
   return { html: html, hit: hit, keep: true };
 }
 
-/* 向上找到所在分管线的分管池：流转范围以分管线为边界 */
-function execAncestorOf(pool) {
-  let cur = pool;
-  while (cur) {
-    if (cur.type === 'exec') return cur;
-    cur = cur.parentId ? poolById(cur.parentId) : null;
-  }
-  return null;
+/* 由任意池向下构建选择树节点 */
+function orgTreeNode(pool) {
+  return { pool: pool, children: sortPoolsByPoolOrder(childPools(pool.id)).map(orgTreeNode) };
 }
 
 /* 统计树中实际可选的池数量：为 0 时提示原因，避免弹窗看起来是死的 */
-function countSelectablePools(n, ctx, isRoot) {
+function countSelectablePools(n, ctx) {
   if (!n) return 0;
-  let c = (!isRoot && ctx.canSelect(n.pool) && ctx.linkedIds.indexOf(n.pool.id) === -1) ? 1 : 0;
-  n.children.forEach((ch) => { c += countSelectablePools(ch, ctx, false); });
+  let c = (ctx.canSelect(n.pool) && ctx.linkedIds.indexOf(n.pool.id) === -1) ? 1 : 0;
+  n.children.forEach((ch) => { c += countSelectablePools(ch, ctx); });
   return c;
+}
+
+/* ==========================================================================
+ * 处理人分发：按部门员工组织架构（org.js，69 部门 / 1294 人）选择目标
+ * 勾选部门＝该部门全员收到待办；勾选个人＝本人收到待办。均抄送信息所属业务池负责人。
+ * ========================================================================== */
+const ORG_RENDER_LIMIT = 80;
+
+function orgSelKeys() {
+  return (modalState.selected || []).filter((k) => k.indexOf('orgd:') === 0 || k.indexOf('orgp:') === 0);
+}
+function orgPickedUserIds() {
+  const ids = [];
+  orgSelKeys().forEach((k) => {
+    if (k.indexOf('orgd:') === 0) orgDeptUserIds(k.slice(5)).forEach((uid) => ids.push(uid));
+    else ids.push(k.slice(5));
+  });
+  return [...new Set(ids)];
+}
+
+window.toggleOrgDeptExpand = (did) => {
+  if (!modalState) return;
+  modalState.orgExpanded = modalState.orgExpanded || [];
+  const i = modalState.orgExpanded.indexOf(did);
+  if (i > -1) modalState.orgExpanded.splice(i, 1); else modalState.orgExpanded.push(did);
+  renderModal();
+  restoreKwFocus();
+};
+window.toggleOrgDeptSel = (did) => {
+  if (!modalState) return;
+  const key = 'orgd:' + did;
+  const i = modalState.selected.indexOf(key);
+  if (i > -1) { modalState.selected.splice(i, 1); }
+  else {
+    /* 整部门与部门内的单人选择互斥，避免重复计数 */
+    const ids = orgDeptUserIds(did);
+    modalState.selected = modalState.selected
+      .filter((k) => k.indexOf('orgp:') !== 0 || ids.indexOf(k.slice(5)) === -1);
+    modalState.selected.push(key);
+  }
+  renderModal();
+  restoreKwFocus();
+};
+window.toggleOrgPersonSel = (uid) => {
+  if (!modalState) return;
+  const did = orgDeptIdOfUser(uid);
+  if (did && (modalState.selected || []).indexOf('orgd:' + did) > -1) return;
+  const key = 'orgp:' + uid;
+  const i = modalState.selected.indexOf(key);
+  if (i > -1) modalState.selected.splice(i, 1); else modalState.selected.push(key);
+  renderModal();
+  restoreKwFocus();
+};
+
+function orgPersonRowHtml(u, deptOn) {
+  const on = deptOn || (modalState.selected || []).indexOf('orgp:' + u.id) > -1;
+  const clickable = !deptOn;
+  const handler = clickable ? 'toggleOrgPersonSel(\'' + u.id + '\')' : '';
+  return '<div class="mt-row mt-person-row' + (on ? ' sel' : '') + (clickable ? '' : ' dis') + '">' +
+    '<span class="mt-caret"></span>' +
+    '<span class="mt-check' + (on ? ' on' : (clickable ? '' : ' dis')) + '"' +
+      (clickable ? ' onclick="' + handler + '"' : '') + '>' + (on ? '✓' : '') + '</span>' +
+    '<span class="mt-name"' + (clickable ? ' onclick="' + handler + '"' : '') + '>' +
+      '<span class="mt-name-main">' + esc(u.name) + '</span>' +
+    '</span>' +
+  '</div>';
+}
+
+function orgSelListHtml(kw) {
+  const k = (kw || '').trim().toLowerCase();
+  const sel = modalState.selected || [];
+  const expanded = modalState.orgExpanded || [];
+  const rows = [];
+  orgDepts().forEach((d) => {
+    const deptNameHit = !k || d.name.toLowerCase().includes(k);
+    const members = d.userIds.map((uid) => userById(uid)).filter(Boolean);
+    const hits = k ? members.filter((u) => (u.name || '').toLowerCase().includes(k)) : [];
+    if (k && !deptNameHit && !hits.length) return;
+    const deptOn = sel.indexOf('orgd:' + d.id) > -1;
+    const personOnCount = members.filter((u) => sel.indexOf('orgp:' + u.id) > -1).length;
+    const open = k ? hits.length > 0 || deptNameHit : expanded.indexOf(d.id) > -1;
+    const pool = k ? hits : members;
+    const list = pool.slice(0, ORG_RENDER_LIMIT);
+    const truncated = list.length < pool.length;
+    const rowCls = (deptOn ? ' sel' : (personOnCount ? ' path' : ''));
+    rows.push('<div class="mt-node">' +
+      '<div class="mt-row org-dept-row' + rowCls + '">' +
+        '<span class="mt-caret" onclick="event.stopPropagation();toggleOrgDeptExpand(\'' + d.id + '\')">' + (open ? '▾' : '▸') + '</span>' +
+        '<span class="mt-check' + (deptOn ? ' on' : (personOnCount ? ' half' : '')) + '"' +
+          ' onclick="toggleOrgDeptSel(\'' + d.id + '\')">' + (deptOn ? '✓' : '') + '</span>' +
+        '<span class="mt-name" onclick="toggleOrgDeptExpand(\'' + d.id + '\')">' +
+          '<span class="mt-name-main">' + esc(d.name) + '</span>' +
+          '<span class="mt-name-sub">' + members.length + ' 人' +
+            (personOnCount && !deptOn ? ' · 已选 ' + personOnCount : '') + '</span>' +
+        '</span>' +
+        (k && hits.length ? '<span class="mt-type">命中 ' + hits.length + ' 人</span>' : '') +
+      '</div>' +
+      (open ? '<div class="mt-children">' +
+        list.map((u) => orgPersonRowHtml(u, deptOn)).join('') +
+        (list.length ? '' : '<div class="lock-tip">按部门名匹配，可勾选整部门，或输入姓名定位人员</div>') +
+        (truncated ? '<div class="lock-tip">' + (k ? '命中 ' + pool.length + ' 人' : '该部门 ' + members.length + ' 人') +
+          '，仅显示前 ' + ORG_RENDER_LIMIT + ' 人，输入姓名可精确定位</div>' : '') +
+      '</div>' : '') +
+    '</div>');
+  });
+  return rows.join('');
+}
+
+function orgChipsHtml() {
+  const keys = orgSelKeys();
+  if (!keys.length) return '';
+  const chips = keys.map((key) => {
+    if (key.indexOf('orgd:') === 0) {
+      const d = orgDeptById(key.slice(5));
+      if (!d) return '';
+      return '<span class="mt-chip person">' + esc(d.name) +
+        '<i>· ' + d.userIds.length + ' 人</i>' +
+        '<b onclick="removeSelTarget(\'' + key + '\')">×</b></span>';
+    }
+    const uid = key.slice(5);
+    const u = userById(uid);
+    const dept = orgDeptById(orgDeptIdOfUser(uid));
+    return '<span class="mt-chip person">' + esc(u ? u.name : uid) +
+      (dept ? '<i>@ ' + esc(dept.name) + '</i>' : '') +
+      '<b onclick="removeSelTarget(\'' + key + '\')">×</b></span>';
+  }).join('');
+  return '<div class="mt-chips"><div class="mt-chips-group">' +
+    '<span class="mt-chips-label">目标 · ' + orgPickedUserIds().length + ' 人</span>' + chips +
+  '</div></div>';
+}
+
+/* 处理人分发弹窗：与总池分发人共用确定/取消与目标 chip 区，只是候选来源换成部门员工组织架构 */
+function renderOrgDispatchModal(m) {
+  const kw = (modalState.kw || '').trim();
+  const anchor = modalState.anchorPoolId || m.sourcePoolId;
+  const pool = poolById(anchor);
+  const ccNames = bizOwnersOf(anchor).filter((id) => id !== curUser().id).map(userName);
+  const listHtml = '<div class="modal-list">' +
+    (orgSelListHtml(kw) || '<div class="lock-tip">没有匹配的部门或人员</div>') + '</div>';
+  document.getElementById('modal').innerHTML =
+    '<h3>分发到部门或人员</h3>' +
+    '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索部门 / 姓名" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
+    '<div class="form-hint" style="margin:0 0 8px">按部门员工组织架构分发：勾选部门＝该部门全员收到待办；' +
+      (ccNames.length ? '抄送' + (pool ? poolName(pool.id) + '所属业务池负责人 ' : '业务池负责人 ') + ccNames.join('、') : '') + '</div>' +
+    listHtml +
+    orgChipsHtml() +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
+      '<button class="btn" onclick="confirmModal()">确定</button>' +
+    '</div>';
+}
+
+/* 分享弹窗：与分发共用部门员工组织架构树，勾选部门＝分享给该部门全员 */
+function renderShareModal(m) {
+  const kw = (modalState.kw || '').trim();
+  const sharedCount = (m.sharedUserIds || []).length;
+  document.getElementById('modal').innerHTML =
+    '<h3>分享给同事</h3>' +
+    '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索部门 / 姓名" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
+    '<div class="form-hint" style="margin:0 0 8px">按部门员工组织架构分享：勾选部门＝分享给该部门全员，对方可查看并回复本条信息' +
+      (sharedCount ? '；当前已分享给 ' + sharedCount + ' 人' : '') + '</div>' +
+    '<div class="modal-list">' + (orgSelListHtml(kw) || '<div class="lock-tip">没有匹配的部门或人员</div>') + '</div>' +
+    orgChipsHtml() +
+    '<div class="modal-actions">' +
+      '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
+      '<button class="btn" onclick="confirmModal()">确认分享</button>' +
+    '</div>';
 }
 
 function renderModal() {
   if (!modalState) return;
   const m = findMsg(modalState.msgId);
 
+  /* 标记为：发起人与李倩影都能标 已解决/未解决，两项恒可点，当前状态只做高亮 */
   if (modalState.mode === 'tag') {
-    const hasReply = repliesOf(m.id).length > 0;
-    const canResolve = hasReply && (canResolveMessage(curUser(), m) || canConfirmCreator(curUser(), m) || linksOf(m.id).some((link) => canConfirmHandler(curUser(), m, link)));
-    const current = m.tags || [];
-    const labels = (canResolve ? ['已解决', '未解决'] : []).concat(MESSAGE_TAGS);
+    const me = curUser();
+    const isQy = isDispatcher(me) || isAdmin(me);
+    const rows = [
+      { tag: '已解决', on: m.status === 'closed' },
+      { tag: '未解决', on: m.status !== 'closed' }
+    ];
+    if (isQy) {
+      const current = m.tags || [];
+      MESSAGE_TAGS.forEach((tag) => rows.push({ tag: tag, on: current.includes(tag) }));
+    }
     document.getElementById('modal').innerHTML =
-      '<div class="tag-modal-head"><b>标记为</b><span>选择业务标签</span></div>' +
-      '<div class="tag-choice-list">' + labels.map((tag) =>
-        '<button type="button" class="tag-choice' + (current.includes(tag) ? ' on' : '') + '" onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +
-          '<span>' + esc(tag) + '</span>' + (current.includes(tag) ? '<i>已标记</i>' : '') +
+      '<div class="tag-modal-head"><b>标记为</b><span>' + (isQy ? '处理状态与业务标签' : '处理状态') + '</span></div>' +
+      '<div class="tag-choice-list">' + rows.map((row) =>
+        '<button type="button" class="tag-choice' + (row.on ? ' on' : '') + '"' +
+          ' onclick="applyMessageTag(\'' + m.id + '\',\'' + row.tag + '\')">' +
+          '<span>' + esc(row.tag) + '</span>' +
+          '<i>' + (row.on ? '当前' : '') + '</i>' +
         '</button>').join('') + '</div>';
     return;
   }
 
-  /* 评论提交二选一：结束处理 / 流转 */
+  /* 倩影汇总回复：新增或修改，最新一条为当前有效汇总 */
+  if (modalState.mode === 'summary') {
+    const target = modalState.summaryId ? summaryById(modalState.summaryId) : latestSummary(m.id);
+    document.getElementById('modal').innerHTML =
+      '<h3>' + (modalState.summaryId ? '修改汇总回复' : '发布汇总回复') + '</h3>' +
+      '<div class="form-row"><textarea id="summaryText" placeholder="请汇总各处理池的结论，统一回复给提出人">' +
+        esc(target ? target.content : '') + '</textarea>' +
+        '<div class="form-hint">汇总回复对发起人及全部处理人可见；多次发布时以最新一条为当前有效汇总</div></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
+        '<button class="btn" onclick="saveSummary()">确定</button>' +
+      '</div>';
+    return;
+  }
+
+  /* 评论提交：处理人不再自行标记办结，只有「评论并流转」一个动作 */
   if (modalState.mode === 'submitChoice') {
     const link = linkById(modalState.linkId);
-    const canResolve = canConfirmHandler(curUser(), m, link);
     const canFwd = canForward(curUser(), m, link);
     document.getElementById('modal').innerHTML =
       '<div class="choice-list">' +
-        '<div class="choice-row' + (canResolve ? '' : ' dis') + '"' + (canResolve ? ' onclick="submitEnd()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并结束处理</span></div>' +
         '<div class="choice-row' + (canFwd ? '' : ' dis') + '"' + (canFwd ? ' onclick="submitForward()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并流转</span></div>' +
       '</div>' +
-      (canResolve || canFwd ? '' : '<div class="form-hint" style="margin-top:8px">当前信息暂无可执行的处理操作</div>');
+      (canFwd ? '' : '<div class="form-hint" style="margin-top:8px">当前信息暂无可执行的流转操作</div>');
+    return;
+  }
+
+  /* 分发统一走部门员工组织架构（真实部门/人员），不再按池树勾选 */
+  if (modalState.mode === 'dispatch') {
+    renderOrgDispatchModal(m);
+    return;
+  }
+
+  /* 分享同样走部门员工组织架构 */
+  if (modalState.mode === 'share') {
+    renderShareModal(m);
     return;
   }
 
   const kw = (modalState.kw || '').trim();
   const linkedIds = linksOf(m.id).map((l) => l.poolId);
-  /* 分发与流转共用同一棵公司树、同一套行渲染与底部选中区，仅可选范围与标题文案不同 */
-  const roots = poolTree();
-  const rootNode = roots.find((x) => x.pool.type === 'company') || roots[0];
-  let title, ctx;
-  if (modalState.mode === 'dispatch') {
-    title = '分发到目标池';
-    ctx = { linkedIds: linkedIds, canSelect: (p) => p.type !== 'company' };
-  } else {
-    const fromLink = linkById(modalState.fromLinkId);
-    const fromPool = poolById(fromLink.poolId);
-    title = '流转到目标池';
-    /* 流转范围＝本池所在分管线内的部门池 / 小组池（含平级），排除本池自身 */
-    const execRoot = execAncestorOf(fromPool);
-    const line = execRoot ? execLinePoolIds(execRoot.id) : [fromPool.id];
-    ctx = {
-      linkedIds: linkedIds,
-      canSelect: (p) => p.id !== fromPool.id && (p.type === 'dept' || p.type === 'group') && line.includes(p.id)
-    };
-  }
-  /* 去掉公司总池根节点包裹：从各分管池（高管）层级直接铺开 */
-  const listInner = (rootNode.children || []).map((c) => selNode(c, ctx, false, kw).html).join('');
-  const noTargetTip = countSelectablePools(rootNode, ctx, true) === 0
-    ? '<div class="form-hint" style="margin:0 0 8px">暂无可选目标池：同分管线内的池均已在处理，或架构中尚未建下级池</div>'
+  /* 流转下级：在本人链路所属池的下级节点里勾选 */
+  const fromLink = linkById(modalState.fromLinkId);
+  const fromPool = poolById(fromLink.poolId);
+  const title = '流转到下级节点';
+  const tip = '流转范围＝' + fromPool.name + ' 的下级节点；原节点置为已流转，由下级继续落实';
+  const nodes = [orgTreeNode(fromPool)];
+  const ctx = {
+    linkedIds: linkedIds,
+    canSelect: (p) => p.id !== fromPool.id && getPoolSubtree(fromPool.id).some((sp) => sp.id === p.id)
+  };
+  const listInner = nodes.map((n) => selNode(n, ctx, kw).html).join('');
+  const selectableCount = nodes.reduce((s, n) => s + countSelectablePools(n, ctx), 0);
+  const noTargetTip = selectableCount === 0
+    ? '<div class="form-hint" style="margin:0 0 8px">暂无可选目标：该范围内的池均已在处理列表中，或尚未建立下级池</div>'
     : '';
   const listHtml = '<div class="modal-list">' +
     (listInner || '<div class="lock-tip">没有匹配的可选池或人员</div>') + '</div>';
   const targets = resolveSelTargets();
-  /* 投递池与落实人分组展示、分别计数：直投人按 handler 人数逐个计 */
-  const poolTargets = targets.filter((t) => !(t.assignMode === 'person' && t.handlerId));
+  /* 节点目标与具体落实人分组展示、分别计数：落实人按人数逐个计 */
+  const nodeTargets = targets.filter((t) => t.mode !== 'person');
   const personChips = [];
   targets.forEach((t) => {
-    if (t.assignMode === 'person' && t.handlerId) {
+    if (t.mode === 'person') {
       (Array.isArray(t.handlerId) ? t.handlerId : [t.handlerId]).forEach((uid) => personChips.push({ uid: uid, poolId: t.poolId }));
     }
   });
-  const poolChipsHtml = poolTargets.map((t) =>
-    '<span class="mt-chip">' + esc(poolName(t.poolId)) +
-      '<b onclick="removeSelTarget(\'' + t.key + '\')">×</b></span>').join('');
+  const nodeChipsHtml = nodeTargets.map((t) => {
+    const who = nodeRecipients(poolById(t.poolId)).map(userName).join('、');
+    return '<span class="mt-chip">' + esc(poolName(t.poolId)) +
+      (who ? '<i>（' + esc(who) + '）</i>' : '') +
+      '<b onclick="removeSelTarget(\'' + t.key + '\')">×</b></span>';
+  }).join('');
   const personChipsHtml = personChips.map((c) =>
     '<span class="mt-chip person">' + esc(userName(c.uid)) +
+      '<i>@ ' + esc(poolName(c.poolId)) + '</i>' +
       '<b onclick="removeSelTarget(\'' + 'pers:' + c.poolId + '|' + c.uid + '\')">×</b></span>').join('');
-  const chipsHtml = (poolTargets.length || personChips.length)
+  const chipsHtml = (nodeTargets.length || personChips.length)
     ? '<div class="mt-chips">' +
-        (poolTargets.length
-          ? '<div class="mt-chips-group"><span class="mt-chips-label">投递池 · ' + poolTargets.length + '</span>' + poolChipsHtml + '</div>'
+        (nodeTargets.length
+          ? '<div class="mt-chips-group"><span class="mt-chips-label">节点 · ' + nodeTargets.length + '</span>' + nodeChipsHtml + '</div>'
           : '') +
         (personChips.length
           ? '<div class="mt-chips-group"><span class="mt-chips-label">落实人 · ' + personChips.length + ' 人</span>' + personChipsHtml + '</div>'
@@ -1377,7 +1645,8 @@ function renderModal() {
     : '';
   document.getElementById('modal').innerHTML =
     '<h3>' + esc(title) + '</h3>' +
-    '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索池名称 / 人员" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
+    '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索池 / 部门 / 人员" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
+    (tip ? '<div class="form-hint" style="margin:0 0 8px">' + esc(tip) + '</div>' : '') +
     noTargetTip +
     listHtml +
     chipsHtml +
@@ -1390,27 +1659,26 @@ function renderModal() {
 /* ==========================================================================
  * 4. 消息详情
  * ========================================================================== */
-window.handlerConfirm = (msgId, linkId, state) => {
-  if (state === 'unresolved' && !confirm('标记为「未解决」后，总消息将重新打开，确定吗？')) return;
-  const r = setHandlerConfirm(msgId, linkId, state, '');
-  if (!r.ok) { toast(r.msg); return; }
+/* ---------- 倩影汇总回复：发布 / 修改，最新一条为当前有效汇总 ---------- */
+window.openSummaryModal = (msgId, summaryId) => {
   const m = findMsg(msgId);
-  toast(m.status === 'closed' ? '落实人与提出人均确认，消息已解决'
-    : state === 'resolved' ? '落实人确认已记录' : '已标记未解决，消息重新打开');
-  render();
+  if (!m || !canManageSummary(curUser())) { toast('仅总池分发人可发布汇总回复'); return; }
+  modalState = { mode: 'summary', msgId, summaryId: summaryId || null };
+  showModal();
 };
-window.creatorConfirm = (msgId, state) => {
-  const r = setCreatorConfirm(msgId, state);
+window.saveSummary = () => {
+  if (!modalState || modalState.mode !== 'summary') return;
+  const el = document.getElementById('summaryText');
+  const text = el ? el.value : '';
+  const r = modalState.summaryId
+    ? editSummary(modalState.summaryId, text)
+    : publishSummary(modalState.msgId, text);
   if (!r.ok) { toast(r.msg); return; }
-  toast(state === 'resolved' ? '已确认，消息已解决' : '已标记为未解决');
+  closeModal();
+  toast(modalState.summaryId ? '汇总回复已更新' : '汇总回复已发布，发起人与处理人均可见');
   render();
 };
-window.creatorResolveReply = (msgId, replyId) => {
-  const result = resolveMessage(msgId, replyId);
-  if (!result.ok) { toast(result.msg); return; }
-  toast('已将该回复标记为解决方案');
-  render();
-};
+
 window.cancelMsg = (msgId) => {
   if (!confirm('确定取消这条消息吗？')) return;
   cancelMessage(msgId);
@@ -1550,33 +1818,25 @@ window.detailSearchKeydown = (event) => {
   }
 };
 
-/* ---------- 固定底栏（小红书式互动栏）：评论框 + 消息级点赞 + 评论数；确认/分发等主动作并入右侧 ---------- */
+/* ---------- 固定底栏（小红书式互动栏）：评论框 + 消息级点赞 + 评论数；标记/分享/分发等主动作并入右侧 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
-  const forwardLink = linksOf(m.id).find((link) => canForward(me, m, link));
   const comment = '<div class="bar-comment">' +
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>';
   const acts = [];
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
   const flowIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10"></path><path d="M12 4l3 3-3 3"></path><path d="M19 17H9"></path><path d="M12 14l-3 3 3 3"></path></svg>';
-  acts.push('<button class="btn btn-sm bar-action-btn" onclick="openTagModal(\'' + m.id + '\')">' + tagIcon + '<span>标记为</span></button>');
+  if (canMarkMessage(me, m) && m.status !== 'cancelled') {
+    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openTagModal(\'' + m.id + '\')">' + tagIcon + '<span>标记为</span></button>');
+  }
   if (canShareMessage(me, m)) {
     const shareIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"></path></svg>';
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openSharePicker(\'' + m.id + '\')">' + shareIcon + '<span>分享</span></button>');
   }
+  /* 分发目标参照部门员工组织架构 */
   if (canDispatch(me, m)) {
-    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>流转</span></button>');
-  } else if (forwardLink) {
-    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\', \'' + forwardLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
-  } else {
-    /* 没有可流转下级池时仍保持可点击，打开弹窗让用户选择或提示不可流转 */
-    const myLink = linksOf(m.id).find((l) => linkActive(l) && poolRole(me, l.poolId));
-    if (myLink) {
-      acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\', \'' + myLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
-    } else {
-      acts.push('<button class="btn btn-sm bar-action-btn" onclick="toast(\'当前信息暂无可流转的下级池\')">' + flowIcon + '<span>流转</span></button>');
-    }
+    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>分发</span></button>');
   }
   const actions = acts.length ? '<div class="bar-actions">' + acts.join('') + '</div>' : '';
   return '<div class="action-bar-spacer"></div>' +
@@ -1588,20 +1848,17 @@ function actionBarHtml(me, m) {
 function logText(l) {
   switch (l.action) {
     case 'created': return l.note || '创建了消息';
+    case 'directed': return l.note || '直投到业务池负责人';
     case 'dispatched': return l.note || '进行了分发';
     case 'forwarded': return l.note || '进行了流转';
     case 'shared': return l.note || '分享了消息';
     case 'reply': return '在 ' + poolName(l.poolId) + ' 回复：' + (l.note || '');
-    case 'handler_confirm': {
-      const n = l.note || '';
-      if (n.indexOf('未解决') > -1) return '已标记未解决';
-      if (n.indexOf('已解决') > -1) return '已解决';
-      return n || '落实人确认';
-    }
-    case 'creator_confirm': return l.note || '提出人确认';
+    case 'summary': return l.note || '发布汇总回复';
+    case 'summary_edit': return l.note || '修改汇总回复';
     case 'auto':
-      if (l.note && l.note.indexOf('进入待确认') > -1) return '所有落实人已回复，提交人确认';
-      return l.note || '状态变更';
+      if (l.note && l.note.indexOf('汇总') > -1) return l.note;
+      if (l.to === 'summarize') return '所有处理人已回复完成，等待李倩影汇总回复';
+      return l.note || '状态变更为「' + (MSG_STATUS[l.to] || l.to) + '」';
     case 'closed': return l.note || '消息关闭';
     case 'cancelled': return l.note || '消息取消';
     default: return l.note || l.action;
@@ -1610,18 +1867,12 @@ function logText(l) {
 
 /* ---------- 评论流卡片：一条评论 + 其所有回复放在同一张卡片内 ----------
  * 一级评论作为卡片主体，嵌套回复紧跟在卡片内部的嵌套区域；
- * 每条回复（含主体）都有赞 / 回复按钮；落实人确认按钮在落实人回复上直接展示。 */
+ * 每条回复（含主体）都有赞 / 回复按钮；处理结论由李倩影统一汇总回复给出。 */
 let replyBoxFor = null;
 
-function singleReplyRowHtml(me, m, r) {
+function singleReplyRowHtml(me, m, r, orphanParent) {
   const au = userById(r.authorId) || {};
-  const link = linkOf(m.id, r.poolId);
   const liked = (r.likedByUserIds || []).includes(me.id);
-  const isHandlerReply = !!(link && link.isFinal && handlerOfLink(link) === r.authorId);
-  const hc = isHandlerReply ? (link.handlerConfirm || { state: 'none' }) : null;
-  const canOp = isHandlerReply && canConfirmHandler(me, m, link);
-  const creatorResolved = !!(m.creatorConfirm && m.creatorConfirm.state === 'resolved' && m.creatorConfirm.replyId === r.id);
-  const canCreatorResolve = me.id === m.createdBy && canResolveMessage(me, m);
   const childCount = S.replies.filter((x) => x.parentReplyId === r.id).length;
   const box = replyBoxFor === r.id
     ? '<div class="cmt-reply-box"><input id="cinput_' + r.id + '" placeholder="回复 ' + esc(au.name || '') + '">' +
@@ -1634,66 +1885,73 @@ function singleReplyRowHtml(me, m, r) {
         '<span class="rname">' + esc(au.name || '') + '</span>' +
         '<span>' + esc(ROLES[au.role] || '') + '</span>' +
         '<span>' + fmtTime(r.at) + '</span>' +
-        (isHandlerReply ? '<span class="cmt-confirm-tag">落实人确认 ' + confirmBadge(hc.state) + '</span>' : '') +
-        (creatorResolved ? '<span class="badge b-resolved cmt-author-resolved">作者标记已解决</span>' : '') +
+        (orphanParent ? '<span class="cmt-confirm-tag">回复他人</span>' : '') +
       '</div>' +
       '<div class="reply-content">' + esc(r.content) + '</div>' +
       attsHtml(r.attachments) +
       '<div class="cmt-foot">' +
         '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">' + (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0) + '</button>' +
         '<button class="like-btn" onclick="toggleCommentBox(\'' + m.id + '\',\'' + r.id + '\')">回复' + (childCount ? ' ' + childCount : '') + '</button>' +
-        (canCreatorResolve ? '<button class="btn btn-sm btn-ghost" onclick="creatorResolveReply(\'' + m.id + '\',\'' + r.id + '\')">标记解决</button>' : '') +
-        (canOp ?
-          '<button class="btn btn-sm' + (hc.state === 'resolved' ? '' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'resolved\')">已解决</button>' +
-          '<button class="btn btn-sm' + (hc.state === 'unresolved' ? ' btn-danger' : ' btn-ghost') + '" onclick="handlerConfirm(\'' + m.id + '\',\'' + link.id + '\',\'unresolved\')">未解决</button>' : '') +
       '</div>' +
       box +
     '</div>' +
   '</div>';
 }
 
-function commentCardHtml(me, m, r) {
-  const replies = repliesOf(m.id);
+/* 当前身份可见的回复线程：父回复不可见时，该条上提为一级评论 */
+function visibleThreads(me, m) {
+  const list = visibleReplies(me, m);
+  const byId = {};
+  list.forEach((r) => { byId[r.id] = r; });
   const byParent = {};
-  replies.forEach((x) => {
-    const k = x.parentReplyId || '';
-    (byParent[k] = byParent[k] || []).push(x);
+  list.forEach((r) => {
+    const k = (r.parentReplyId && byId[r.parentReplyId]) ? r.parentReplyId : '';
+    (byParent[k] = byParent[k] || []).push(r);
   });
   Object.keys(byParent).forEach((k) => byParent[k].sort((a, b) => a.at - b.at));
+  return { list: list, roots: byParent[''] || [], byParent: byParent, byId: byId };
+}
+
+function commentCardHtml(me, m, r, threads, isOrphan) {
   let nestedHtml = '';
   const walk = (parentKey) => {
-    (byParent[parentKey] || []).forEach((child) => {
-      nestedHtml += singleReplyRowHtml(me, m, child);
+    (threads.byParent[parentKey] || []).forEach((child) => {
+      nestedHtml += singleReplyRowHtml(me, m, child, false);
       walk(child.id);
     });
   };
   walk(r.id);
   return '<div class="cmt-thread">' +
-    singleReplyRowHtml(me, m, r) +
+    singleReplyRowHtml(me, m, r, isOrphan) +
     (nestedHtml ? '<div class="cmt-nested">' + nestedHtml + '</div>' : '') +
   '</div>';
 }
 
-function commentThreadHtml(me, m, replies) {
-  const roots = replies.filter((r) => !r.parentReplyId).sort((a, b) => a.at - b.at);
-  return roots.map((r) => commentCardHtml(me, m, r)).join('');
-}
-
-/* 通用评论归属池：优先本人在其中的池，其次任一在办池，最后来源池 */
+/* 通用评论归属池：优先本人收件中的池，其次任一在办池，最后投递池 */
 function pickCommentPool(m, me) {
   const links = linksOf(m.id);
-  const mine = myPoolIds(me);
-  const lk = links.find((l) => mine.includes(l.poolId));
-  if (lk) return lk.poolId;
+  const mine = links.find((l) => linkActive(l) && recipientsOf(l).includes(me.id));
+  if (mine) return mine.poolId;
+  const inPool = links.find((l) => myPoolIds(me).includes(l.poolId));
+  if (inPool) return inPool.poolId;
   if (links.length) return links[0].poolId;
-  return m.sourcePoolId || 'p_company';
+  return m.sourcePoolId;
 }
 
+/* ---------- 评论流卡片列表 ---------- */
 function commentAreaHtml(me, m) {
-  const replies = repliesOf(m.id);
+  const threads = visibleThreads(me, m);
+  const isFull = isAdmin(me) || isDispatcher(me);
+  /* 发起人看不到处理人的中间回复，无可见回复时整张卡片不展示 */
+  if (!threads.list.length && me.id === m.createdBy) return '';
+  const sub = isFull
+    ? threads.list.length + ' 条 · 按回复时间排序'
+    : '我可见的 ' + threads.list.length + ' 条回复 · 他人中间回复仅李倩影可见';
   /* 标题与全部回复合入同一张卡片，回复线程之间用细线分隔 */
-  return '<div class="card"><div class="card-title">回复<span class="sub">' + replies.length + ' 条 · 按处理时间排序 · 所有参与方可见</span></div>' +
-    (replies.length ? commentThreadHtml(me, m, replies) : empty('暂无回复')) +
+  return '<div class="card"><div class="card-title">回复<span class="sub">' + sub + '</span></div>' +
+    (threads.list.length
+      ? threads.roots.map((r) => commentCardHtml(me, m, r, threads, !!r.parentReplyId)).join('')
+      : empty('暂无我的回复')) +
   '</div>';
 }
 
@@ -1711,11 +1969,11 @@ function mentionCandidates(m) {
   const ids = [];
   if (m.createdBy) ids.push(m.createdBy);
   linksOf(m.id).forEach((l) => {
-    const h = handlerOfLink(l);
-    if (h) ids.push(h);
+    recipientsOf(l).forEach((uid) => ids.push(uid));
+    ccOf(l).forEach((uid) => ids.push(uid));
     if (l.dispatchedBy) ids.push(l.dispatchedBy);
   });
-  repliesOf(m.id).forEach((r) => ids.push(r.authorId));
+  visibleReplies(curUser(), m).forEach((r) => ids.push(r.authorId));
   return [...new Set(ids)];
 }
 
@@ -1822,7 +2080,7 @@ window.cmtPickAt = (id) => {
   renderCommentPanel(); restoreCmtFocus();
 };
 
-/* 提交：当前用户是处理人且消息未结束 → 弹「结束处理 / 流转」；否则直接生成评论 */
+/* 提交：处理人有可流转的下级时弹「评论并流转」；否则直接生成评论 */
 window.submitCommentPanel = () => {
   if (!cmtPanel) return;
   const st = cmtPanel;
@@ -1831,7 +2089,7 @@ window.submitCommentPanel = () => {
   const me = curUser();
   const m = findMsg(st.msgId);
   const link = !isEnded(m) ? myActiveUnsubmittedLink(me, m) : null;
-  if (link) {
+  if (link && canForward(me, m, link)) {
     closeCommentPanel();
     modalState = { mode: 'submitChoice', msgId: st.msgId, poolId: link.poolId, linkId: link.id, content: content || '[附件]', atts: st.atts };
     showModal();
@@ -1878,19 +2136,28 @@ window.submitCommentReply = (msgId, parentId) => {
   render();
 };
 
+/* 分发去向文案：池/部门（收件人，抄送业务池负责人） */
+function dispatchTargetsText(m) {
+  return linksOf(m.id).map((l) => {
+    const who = peopleBrief(recipientsOf(l));
+    const cc = ccOf(l).map(userName);
+    return poolName(l.poolId) + (who ? '（' + who + (cc.length ? '，抄送 ' + cc.join('、') : '') + '）' : '');
+  }).join('、');
+}
+
 function renderDetail(id) {
   const me = curUser();
   const m = findMsg(id);
   const toolbar = detailToolbarHtml();
   if (!m) return toolbar + '<div class="card no-perm">消息不存在</div>';
   if (!canSeeMessage(me, m)) {
-    return toolbar + '<div class="card no-perm">您无权查看该消息<br>分池成员只能查看本池消息，不同分管线互不可见</div>';
+    return toolbar + '<div class="card no-perm">您无权查看该消息<br>仅发起人、总池分发人李倩影及被分发到的处理人可查看</div>';
   }
   const links = linksOf(m.id);
   const srcPool = poolById(m.sourcePoolId);
 
   /* 头部（客户信息标签融合在主卡片内：仅池处理人员可见，提出人不可见，点击跳客户信息页） */
-  const pools = linksOf(m.id).map((l) => poolName(l.poolId)).join('、');
+  const targets = dispatchTargetsText(m);
   const head = '<div class="card detail-head">' +
     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
       '<span class="detail-no">' + m.no + '</span>' + flowBadge(m, me) + messageTagsHtml(m) +
@@ -1899,14 +2166,16 @@ function renderDetail(id) {
     '<h2>' + esc(m.title) + '</h2>' +
     '<div class="detail-meta">' +
       '<span>提出人：' + esc(userName(m.createdBy)) + '（' + esc((userById(m.createdBy) || {}).dept || '') + '）</span>' +
-      '<span>投递：' + (m.direct ? '直投 ' + esc(srcPool ? srcPool.name : '') : '公司总池') + '</span>' +
+      '<span>投递：' + esc(srcPool ? srcPool.name : '—') + '池</span>' +
       '<span>创建于 ' + fmtTime(m.createdAt) + '</span>' +
     '</div>' +
     (proposalTypes(m).length ? '<div class="detail-info-line"><span class="detail-info-label">提议类型：</span><span>' + esc(proposalTypes(m).join('、')) + '</span></div>' : '') +
     (m.customerName ? '<div class="detail-info-line"><span class="detail-info-label">客户：</span><span>' + esc(m.customerName) + '</span></div>' : '') +
     (m.sourceOther ? '<div class="detail-info-line"><span class="detail-info-label">类型说明：</span><span>' + esc(m.sourceOther) + '</span></div>' : '') +
-    (pools ? '<div class="detail-info-line"><span class="detail-info-label">涉及池：</span><span>' + esc(pools) + '</span></div>' : '') +
-    ((m.sharedUserIds && m.sharedUserIds.length) ? '<div class="detail-info-line"><span class="detail-info-label">分享给了：</span><span>' + esc(m.sharedUserIds.map(userName).join('、')) + '</span></div>' : '') +
+    (links.length
+      ? '<div class="detail-info-line"><span class="detail-info-label">分发至：</span><span>' + esc(targets) + '</span></div>'
+      : '<div class="detail-info-line"><span class="detail-info-label">分发状态：</span><span>待李倩影分发</span></div>') +
+    ((m.sharedUserIds && m.sharedUserIds.length) ? '<div class="detail-info-line"><span class="detail-info-label">分享给了：</span><span>' + esc(peopleBrief(m.sharedUserIds)) + '</span></div>' : '') +
     '<div class="content-box">' + esc(m.content) + '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
@@ -1915,21 +2184,23 @@ function renderDetail(id) {
       : '') +
   '</div>';
 
-  /* 评论流：一级评论按时间正序，嵌套评论紧跟父评论；所有可见者看全部回复 */
+  /* 评论流：按身份过滤，非分发人只见自己的回复 */
   const comments = '<div id="cmtArea">' + commentAreaHtml(me, m) + '</div>';
 
-  /* 全局时间线（每个可见者都展示） */
-  let globalSections = '';
-  const logs = logsOf(m.id);
-  globalSections += '<div class="card"><div class="card-title">全局汇总时间线<span class="sub">所有分池回复与操作自动挂回本消息</span></div>' +
+  /* 时间线：处理人的中间回复与办结动作仅分发人和本人可见 */
+  const isFull = isAdmin(me) || isDispatcher(me);
+  const logs = visibleLogs(me, m);
+  const timeline = '<div class="card"><div class="card-title">' +
+    (isFull ? '全局时间线' : '关键节点时间线') +
+    '<span class="sub">' + (isFull ? '分发动作、处理人回复与汇总回复全量记录' : '仅展示投递、分发与汇总回复等关键节点') + '</span></div>' +
     (logs.length ? logs.map((l) => {
-      const key = ['created', 'dispatched', 'forwarded', 'closed', 'cancelled'].includes(l.action);
+      const key = ['created', 'directed', 'dispatched', 'forwarded', 'summary', 'closed', 'cancelled'].includes(l.action);
       return '<div class="tl-item' + (key ? ' tl-key' : '') + '">' +
         '<div class="tl-text"><b>' + esc(userName(l.actorId)) + '</b> ' + esc(logText(l)) + '</div>' +
         '<div class="tl-time">' + fmtTime(l.at) + '</div></div>';
     }).join('') : empty('暂无记录')) + '</div>';
 
-  return toolbar + head + comments + globalSections + actionBarHtml(me, m);
+  return toolbar + head + comments + timeline + actionBarHtml(me, m);
 }
 
 /* ==========================================================================
@@ -1939,7 +2210,6 @@ var pmState = {
   mainTab: 'messages',     // 'messages' (分管池在办信息) | 'tree' (池架构管理)
   selectedPoolId: null,
   filterPoolId: 'all',     // 'all' 或具体 poolId
-  collapsedMap: {},
   includeSub: true,
   statusFilter: 'all',
   keyword: '',
@@ -1950,10 +2220,9 @@ var pmState = {
 window.pmState = pmState;
 
 function pmGetLevelName(level) {
-  if (level === 0) return '公司总池';
-  if (level === 1) return '分管池';
-  if (level === 2) return '部门池';
-  if (level === 3) return '小组池';
+  if (level === 0) return '业务池';
+  if (level === 1) return '部门池';
+  if (level === 2) return '小组池';
   return '池节点';
 }
 
@@ -1968,41 +2237,25 @@ function pmFormatOwner(pool) {
   }
   const names = pool.ownerIds.map((id) => userName(id)).join('、');
   const count = pool.ownerIds.length;
-  // 树节点左侧空间紧凑，显示主负责人，多位时带上人数徽标，悬停可看全部
-  const shortText = count > 1 ? userName(pool.ownerIds[0]) + ' 等' + count + '人' : userName(pool.ownerIds[0]);
-  return '<span class="pm-node-owner" title="共同负责人(' + count + '人)：' + esc(names) + '">' + esc(shortText) + '</span>';
+  return '<span class="pm-node-owner" title="负责人(' + count + '人)：' + esc(names) + '">' + esc(names) + '</span>';
 }
 
-/* 渲染单棵树的递归节点 */
-function pmRenderNodeHtml(pool, depth, me) {
+/* 渲染单个业务池行：池管理只列一级池，部门与小组不再展开 */
+function pmRenderNodeHtml(pool) {
   if (!pool || pool.status === 'DELETED') return '';
-  const allSubpools = S.pools || [];
-  const children = sortPoolsByPoolOrder(allSubpools.filter((p) => p.parentId === pool.id && p.status !== 'DELETED'));
-  const hasChildren = children.length > 0;
-  const isCollapsed = !!pmState.collapsedMap[pool.id];
 
   const metrics = poolMetrics(pool.id, pmState.includeSub);
   const count = metrics.total;
   const hasOverdue = metrics.hasOverdue;
-
-  // 展开折叠图标
-  let caret = '<span class="pm-node-dot"></span>';
-  if (hasChildren) {
-    caret = '<button type="button" class="pm-toggle-btn" onclick="event.stopPropagation(); pmToggleCollapse(\'' + pool.id + '\')">' +
-      (isCollapsed ? '▶' : '▼') + '</button>';
-  }
 
   // 身份与层级判断
   const levelTag = pmGetLevelTag(pool.level);
   const ownerHtml = pmFormatOwner(pool);
   const countClass = 'pm-count-pill' + (hasOverdue ? ' has-overdue' : '');
 
-  // 行缩进（每一级微调为 14px，避免深层级浪费过多宽度）
-  const paddingLeft = depth * 14;
-
   let html = '<div class="pm-node-wrap">';
-  html += '<div class="pm-node-row" style="margin-left: ' + paddingLeft + 'px;">';
-  html += caret;
+  html += '<div class="pm-node-row">';
+  html += '<span class="pm-node-dot"></span>';
   html += '<div class="pm-node-main">';
   html += '<span class="pm-node-title" title="' + esc(pool.name) + '">' + esc(pool.name) + '</span>';
   html += levelTag;
@@ -2013,14 +2266,6 @@ function pmRenderNodeHtml(pool, depth, me) {
   html += '<button type="button" class="pm-menu-btn" title="更多操作" onclick="event.stopPropagation(); pmOpenMenu(\'' + pool.id + '\')">···</button>';
   html += '</div>'; // .pm-node-right
   html += '</div>'; // .pm-node-row
-
-  // 子节点；新建小组池统一收进部门池右侧“更多操作”菜单
-  if (hasChildren && !isCollapsed) {
-    children.forEach((cp) => {
-      html += pmRenderNodeHtml(cp, depth + 1, me);
-    });
-  }
-
   html += '</div>';
   return html;
 }
@@ -2035,7 +2280,6 @@ function pmRenderDetailHtml(pool, me) {
   const canEdit = canEditPoolSettings(me, pool);
   const canSetOwner = canSetPoolOwner(me, pool);
   const canManageMembers = canManagePoolMembers(me, pool);
-  const canCreate = canCreateSubPool(me, pool);
 
   let html = '<div class="card pm-detail-card" style="padding: 18px 20px;">';
   // 卡片顶栏
@@ -2049,9 +2293,6 @@ function pmRenderDetailHtml(pool, me) {
   html += '</div>';
   html += '<div style="display: flex; gap: 8px; align-items: center;">';
   html += '<button type="button" class="btn btn-sm btn-primary" onclick="pmViewPoolMessages(\'' + pool.id + '\')">查看此池在办信息 (' + poolMsgs.length + '条) →</button>';
-  if (canCreate) {
-    html += '<button type="button" class="btn btn-sm btn-ghost" onclick="pmOpenCreateSub(\'' + pool.id + '\')">+ 子池</button>';
-  }
   html += '</div>';
   html += '</div>'; // top bar
 
@@ -2070,12 +2311,12 @@ function pmRenderDetailHtml(pool, me) {
       (ownerIds.length ? '配置/增减' : '+ 指定') + '</button>';
   }
 
+  const secIds = pool.secretaryIds || [];
   html += '<div class="pm-detail-meta-grid" style="margin-bottom: 16px;">';
   html += '<div class="pm-meta-item wide"><div class="lbl">共同负责人 (' + ownerIds.length + '人)</div><div class="val">' + ownerValHtml + '</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">秘书</div><div class="val">' + (secIds.length ? esc(secIds.map(userName).join('、')) : '—') + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">成员规模</div><div class="val">' + memberList.length + ' 人</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">办结时限</div><div class="val">' + (pool.timeoutDays || 2) + ' 天</div></div>';
-  html += '<div class="pm-meta-item"><div class="lbl">允许直投</div><div class="val">' + (pool.allowDirect ? '是' : '否') + '</div></div>';
-  html += '<div class="pm-meta-item"><div class="lbl">自动分配</div><div class="val">' + (pool.autoAssign ? '开启' : '关闭') + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">管辖层级</div><div class="val">' + pmGetLevelName(pool.level) + '</div></div>';
   html += '</div>'; // .pm-detail-meta-grid
 
@@ -2150,13 +2391,7 @@ function pmRenderDetailHtml(pool, me) {
     html += '<div class="form-row"><div class="form-label">办结时限要求 (天)</div>' +
       '<input type="number" id="inlinePoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" ' + (!canEdit ? 'disabled' : '') + '></div>';
 
-    html += '<div class="form-row"><div class="form-label">直投与分发规则</div>' +
-      '<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; margin-bottom: 6px;">' +
-        '<input type="checkbox" id="inlinePoolAllowDirect"' + (pool.allowDirect ? ' checked' : '') + ' ' + (!canEdit ? 'disabled' : '') + '> 允许填报时直接投递此池' +
-      '</label>' +
-      '<label style="display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer;">' +
-        '<input type="checkbox" id="inlinePoolAutoAssign"' + (pool.autoAssign ? ' checked' : '') + ' ' + (!canEdit ? 'disabled' : '') + '> 进池新事项自动分配到池负责人' +
-      '</label></div>';
+    html += '<div class="form-hint">8 个业务池为填报入口，进池消息直投该池负责人+秘书，总池分发人李倩影同步跟进并可继续分发；池本身不设其他分发人。</div>';
 
     if (canEdit) {
       html += '<div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">' +
@@ -2197,7 +2432,6 @@ function pmRenderModalHtml(me) {
 
   // 1. 操作菜单 ActionSheet 弹窗
   if (m.type === 'menu' && pool) {
-    const canCreate = canCreateSubPool(me, pool);
     const canSetOwner = canSetPoolOwner(me, pool);
     const canManageMem = canManagePoolMembers(me, pool);
     const canEdit = canEditPoolSettings(me, pool);
@@ -2211,7 +2445,6 @@ function pmRenderModalHtml(me) {
         '</div>' +
         '<div class="pm-modal-body">' +
           '<div class="pm-sheet-menu">' +
-            (canCreate ? '<button type="button" class="pm-sheet-item" onclick="pmOpenCreateSub(\'' + pool.id + '\');">新建小组池</button>' : '') +
             (canSetOwner ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSetOwner(\'' + pool.id + '\');">共同负责人</button>' : '') +
             (canManageMem ? '<button type="button" class="pm-sheet-item" onclick="pmOpenAddMember(\'' + pool.id + '\');">池成员</button>' : '') +
             (canEdit ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSettings(\'' + pool.id + '\');">规则设置</button>' : '') +
@@ -2222,73 +2455,7 @@ function pmRenderModalHtml(me) {
     '</div>';
   }
 
-  // 2. 新建子池弹窗（支持同时指定多位负责人）
-  if (m.type === 'createSub') {
-    const parentPool = poolById(m.parentPoolId);
-    const parentName = parentPool ? parentPool.name : '公司总池';
-    const nextLevelName = parentPool ? (parentPool.level === 0 ? '分管池' : (parentPool.level === 1 ? '部门池' : '小组池')) : '子池';
-
-    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
-      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
-        '<div class="pm-modal-head">' +
-          '<h3>新建' + nextLevelName + '</h3>' +
-          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
-        '</div>' +
-        '<form onsubmit="event.preventDefault(); pmSubmitCreateSub()">' +
-          '<div class="pm-modal-body">' +
-            '<div class="pm-form-row">' +
-              '<label>所属上级池</label>' +
-              '<input type="text" value="' + esc(parentName) + '" disabled />' +
-              '<input type="hidden" id="newPoolParentId" value="' + (parentPool ? parentPool.id : '') + '" />' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label>池名称 <span style="color:#d92d20;">*</span></label>' +
-              '<input type="text" id="newPoolName" placeholder="例如：新材料研究部池、华南组池" required />' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label>初始负责人（支持多选）</label>' +
-              '<div class="pm-multi-select-list compact">' +
-                USERS.map((u) => {
-                  return '<label class="pm-multi-select-item">' +
-                    '<input type="checkbox" name="newPoolOwnerSelect" value="' + u.id + '" onchange="this.closest(\'.pm-multi-select-item\').classList.toggle(\'checked\', this.checked);" />' +
-                    '<span class="pm-member-avatar">' + esc(u.name.slice(0, 1)) + '</span>' +
-                    '<div class="pm-ms-info">' +
-                      '<span class="pm-ms-name">' + esc(u.name) + '</span>' +
-                      '<span class="pm-ms-dept">' + esc(u.dept || u.role) + '</span>' +
-                    '</div>' +
-                  '</label>';
-                }).join('') +
-              '</div>' +
-              '<div class="hint">可勾选一位或多位共同负责人（创建后可随时增减）</div>' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label>办理时限要求（天）</label>' +
-              '<input type="number" id="newPoolTimeout" value="2" min="1" max="30" />' +
-              '<div class="hint">超出该时限未办结时将在池监控中标记为超时</div>' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label class="pm-switch-label">' +
-                '<span>允许直投建单</span>' +
-                '<input type="checkbox" id="newPoolAllowDirect" checked />' +
-              '</label>' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label class="pm-switch-label">' +
-                '<span>进池自动分配到负责人</span>' +
-                '<input type="checkbox" id="newPoolAutoAssign" />' +
-              '</label>' +
-            '</div>' +
-          '</div>' +
-          '<div class="pm-modal-foot">' +
-            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
-            '<button type="submit" class="btn btn-primary">确认创建</button>' +
-          '</div>' +
-        '</form>' +
-      '</div>' +
-    '</div>';
-  }
-
-  // 3. 池设置弹窗
+  // 2. 池设置弹窗
   if (m.type === 'settings' && pool) {
     return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
       '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
@@ -2306,18 +2473,7 @@ function pmRenderModalHtml(me) {
               '<label>办理时限（天）</label>' +
               '<input type="number" id="editPoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" />' +
             '</div>' +
-            '<div class="pm-form-row">' +
-              '<label class="pm-switch-label">' +
-                '<span>允许直接投递建单</span>' +
-                '<input type="checkbox" id="editPoolAllowDirect"' + (pool.allowDirect ? ' checked' : '') + ' />' +
-              '</label>' +
-            '</div>' +
-            '<div class="pm-form-row">' +
-              '<label class="pm-switch-label">' +
-                '<span>新消息自动分配</span>' +
-                '<input type="checkbox" id="editPoolAutoAssign"' + (pool.autoAssign ? ' checked' : '') + ' />' +
-              '</label>' +
-            '</div>' +
+            '<div class="hint">消息进池后直投池负责人+秘书，总池分发人李倩影同步跟进并可继续分发，池内不再设置其他分发人</div>' +
           '</div>' +
           '<div class="pm-modal-foot">' +
             '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
@@ -2328,7 +2484,7 @@ function pmRenderModalHtml(me) {
     '</div>';
   }
 
-  // 4. 配置/增减池负责人弹窗（支持多选、共同负责）
+  // 3. 配置/增减池负责人弹窗（支持多选、共同负责）
   if (m.type === 'setOwner' && pool) {
     const curOwners = new Set(pool.ownerIds || []);
     return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
@@ -2373,7 +2529,7 @@ function pmRenderModalHtml(me) {
     '</div>';
   }
 
-  // 5. 添加成员弹窗
+  // 4. 添加成员弹窗
   if (m.type === 'addMember' && pool) {
     const existing = new Set(pool.memberIds || []);
     const candidates = USERS.filter((u) => !existing.has(u.id));
@@ -2420,7 +2576,7 @@ function pmRenderModalHtml(me) {
     '</div>';
   }
 
-  // 6. 催办弹窗
+  // 5. 催办弹窗
   if (m.type === 'urge') {
     const msg = findMsg(m.messageId);
     return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
@@ -2450,7 +2606,7 @@ function pmRenderModalHtml(me) {
     '</div>';
   }
 
-  // 7. 转派弹窗
+  // 6. 转派弹窗
   if (m.type === 'transfer') {
     const msg = findMsg(m.messageId);
     const visibleSubtree = visiblePoolSubtree(me);
@@ -2608,24 +2764,46 @@ function pmRenderManagedMessagesHtml(me, root, subTreePools, allManagedMsgs) {
   return html;
 }
 
-/* 架构树与配置治理 Tab 渲染 */
-function pmRenderTreeManagementHtml(me, root) {
+/* 池管理只治理一级业务池：分发人/管理员见全部 8 个，业务池负责人见自己负责的，
+ * 部门与小组负责人归入其所属业务池（部门/小组本身不在本页管理） */
+function pmBizPoolsFor(me) {
+  if (isAdmin(me) || isDispatcher(me)) return bizPools();
+  const owned = bizPools().filter((p) => (p.ownerIds || []).includes(me.id));
+  if (owned.length) return owned;
+  const root = userRootPool(me);
+  if (!root) return [];
+  let cur = root;
+  while (cur && cur.parentId) cur = poolById(cur.parentId);
+  return cur && cur.type === 'biz' ? [cur] : [];
+}
+
+/* 架构树与配置治理 Tab 渲染：只治理一级业务池，部门与小组随组织架构归入业务池 */
+function pmRenderTreeManagementHtml(me) {
   let html = '<div class="pm-split">';
 
   // 左侧：管辖池架构树
   html += '<div class="pm-split-left">';
   html += '<div class="card pm-tree-card">';
-  html += '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">';
-  html += '<div class="card-title" style="font-size: 15px; margin: 0;">信息池架构与配置</div>';
-  html += '</div>';
+  html += '<div class="card-title" style="font-size: 15px; margin-bottom: 10px;">目标池</div>';
 
   // 树筛选栏 (统一采用标准 filters 样式)
   html += '<div class="filters" style="margin-bottom: 12px; gap: 8px;">';
-  html += '<input type="text" id="pmSearchInput" placeholder="搜池名称 / 负责人..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px;" />';
+  html += '<input type="text" id="pmSearchInput" placeholder="搜池名称 / 负责人 / 秘书..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px;" />';
   html += '</div>';
 
   html += '<div class="pm-tree-body" style="max-height: 640px; overflow-y: auto; padding-right: 2px;">';
-  html += pmRenderNodeHtml(root, 0, me);
+  const kw = (pmState.keyword || '').trim().toLowerCase();
+  const roots = pmBizPoolsFor(me).filter((p) => {
+    if (!kw) return true;
+    const hay = [p.name]
+      .concat((p.ownerIds || []).map(userName))
+      .concat((p.secretaryIds || []).map(userName))
+      .join(' ').toLowerCase();
+    return hay.indexOf(kw) > -1;
+  });
+  html += roots.length
+    ? roots.map((p) => pmRenderNodeHtml(p)).join('')
+    : empty(kw ? '没有匹配「' + esc(kw) + '」的业务池' : '部门与小组由组织架构归入业务池，池管理只治理一级业务池');
   html += '</div>';
 
   html += '</div>'; // .card
@@ -2638,18 +2816,18 @@ function pmRenderTreeManagementHtml(me, root) {
 /* 主入口函数：renderPools() */
 function renderPools() {
   const me = curUser();
-  const root = userRootPool(me);
+  const roots = pmRoots(me);
 
   // 如果普通员工没有所属管理根节点
-  if (!root || !canAccessPoolManage(me)) {
+  if (!roots.length || !canAccessPoolManage(me)) {
     return '<div class="card empty" style="max-width: 640px; margin: 40px auto; padding: 32px 24px;">' +
       '<div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1f2430;">您当前身份为普通员工，暂无池管理权限</div>' +
       '<div style="font-size: 13px; color: #667085; max-width: 480px; margin: 0 auto 20px; line-height: 1.6;">' +
-        '当前身份（<b>' + esc(me.name) + ' · ' + (me.title || ROLES[me.role]) + '</b>）属于基层员工。请在右上角切换为<b>总池分发人、分管高管或部门/小组负责人</b>，以体验按职级授权裁剪的池管理架构树。' +
+        '当前身份（<b>' + esc(me.name) + ' · ' + (me.title || ROLES[me.role]) + '</b>）属于基层员工。请在右上角切换为<b>总池分发人、业务池负责人或部门/小组负责人</b>，以体验按职级授权裁剪的组织架构树。' +
       '</div>' +
       '<div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">' +
-        '<button type="button" class="btn btn-primary" onclick="changeIdentity(\'u_qy\')">切为 李倩影 · 总池分发人 (全树)</button>' +
-        '<button type="button" class="btn btn-ghost" onclick="changeIdentity(\'u_wjx\')">切为 王冀湘 · 分管人</button>' +
+        '<button type="button" class="btn btn-primary" onclick="changeIdentity(\'u_qy\')">切为 李倩影 · 总池分发人（全部 8 个池）</button>' +
+        '<button type="button" class="btn btn-ghost" onclick="changeIdentity(\'u_wjx\')">切为 王冀湘 · 机构池负责人</button>' +
         '<button type="button" class="btn btn-ghost" onclick="changeIdentity(\'u_zm\')">切为 周明 · 部门负责人</button>' +
       '</div>' +
     '</div>';
@@ -2658,7 +2836,7 @@ function renderPools() {
   let html = '<div class="pm-container">';
 
   // 池管理页专注信息池架构与配置
-  html += pmRenderTreeManagementHtml(me, root);
+  html += pmRenderTreeManagementHtml(me);
 
   html += '</div>'; // .pm-container
 
@@ -2671,9 +2849,8 @@ function renderPools() {
 /* ---------- 页面事件绑定函数 ---------- */
 window.pmOnIdentityChange = function() {
   pmState.modal = null;
-  const me = curUser();
-  const root = userRootPool(me);
-  pmState.selectedPoolId = root ? root.id : null;
+  const roots = pmRoots(curUser());
+  pmState.selectedPoolId = roots.length ? roots[0].id : null;
   pmState.filterPoolId = 'all';
 };
 
@@ -2712,11 +2889,6 @@ window.pmSetSelected = function(poolId) {
   render();
 };
 
-window.pmToggleCollapse = function(poolId) {
-  pmState.collapsedMap[poolId] = !pmState.collapsedMap[poolId];
-  render();
-};
-
 window.pmSetIncludeSub = function(val) {
   pmState.includeSub = !!val;
   render();
@@ -2744,16 +2916,6 @@ window.pmSetTab = function(tab) {
 
 window.pmOpenMenu = function(poolId) {
   pmState.modal = { type: 'menu', poolId };
-  render();
-};
-
-window.pmOpenCreateSub = function(parentPoolId) {
-  const parentPool = poolById(parentPoolId);
-  if (!canCreateSubPool(curUser(), parentPool)) {
-    toast('部门池和分管池由组织架构确定，只能新建小组池');
-    return;
-  }
-  pmState.modal = { type: 'createSub', parentPoolId };
   render();
 };
 
@@ -2815,40 +2977,11 @@ window.pmUpdateMemberSelectCount = function() {
   });
 };
 
-window.pmSubmitCreateSub = function() {
-  const parentId = document.getElementById('newPoolParentId').value;
-  const name = document.getElementById('newPoolName').value;
-  const timeoutDays = document.getElementById('newPoolTimeout').value;
-  const allowDirect = document.getElementById('newPoolAllowDirect').checked;
-  const autoAssign = document.getElementById('newPoolAutoAssign').checked;
-
-  const cbs = document.querySelectorAll('input[name="newPoolOwnerSelect"]:checked');
-  const ownerIds = Array.from(cbs).map((cb) => cb.value);
-
-  if (!name.trim()) {
-    toast('请输入池名称');
-    return;
-  }
-  const res = createPool({
-    name, parentId, ownerIds, timeoutDays, allowDirect, autoAssign
-  });
-  if (res.ok) {
-    toast('子池「' + res.pool.name + '」已成功创建');
-    pmState.selectedPoolId = res.pool.id;
-    pmState.modal = null;
-    render();
-  } else {
-    toast(res.msg || '新建小组池失败');
-  }
-};
-
 window.pmSubmitSettings = function(poolId) {
   const name = document.getElementById('editPoolName').value;
   const timeoutDays = document.getElementById('editPoolTimeout').value;
-  const allowDirect = document.getElementById('editPoolAllowDirect').checked;
-  const autoAssign = document.getElementById('editPoolAutoAssign').checked;
 
-  const res = updatePool(poolId, { name, timeoutDays, allowDirect, autoAssign });
+  const res = updatePool(poolId, { name, timeoutDays });
   if (res.ok) {
     toast('池设置已成功更新');
     pmState.modal = null;
@@ -2859,17 +2992,13 @@ window.pmSubmitSettings = function(poolId) {
 window.pmSubmitInlineSettings = function(poolId) {
   const nameEl = document.getElementById('inlinePoolName');
   const timeoutEl = document.getElementById('inlinePoolTimeout');
-  const directEl = document.getElementById('inlinePoolAllowDirect');
-  const assignEl = document.getElementById('inlinePoolAutoAssign');
 
   const name = nameEl ? nameEl.value.trim() : '';
   const timeoutDays = timeoutEl ? timeoutEl.value : 2;
-  const allowDirect = directEl ? directEl.checked : false;
-  const autoAssign = assignEl ? assignEl.checked : false;
 
-  const res = updatePool(poolId, { name, timeoutDays, allowDirect, autoAssign });
+  const res = updatePool(poolId, { name, timeoutDays });
   if (res.ok) {
-    toast('已保存池参数与规则配置');
+    toast('已保存池参数配置');
     render();
   }
 };
