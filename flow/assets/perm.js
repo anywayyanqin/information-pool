@@ -196,12 +196,19 @@ function poolRole(u, poolId) {
   return null;
 }
 
+/* 用户是否为该消息的处理人（任一链路的收件人，含在办与已办结链路） */
+function isHandlerOf(u, m) {
+  return linksOf(m.id).some((l) => recipientsOf(l).includes(u.id));
+}
+
 /* 回复可见性（覆盖旧「所有参与方可见全部回复」规则）：
  * 总池分发人/管理员看全部处理人回复；
- * 发起人与处理人均只能看到自己的回复，中间回复互不可见；
+ * 处理人可看到所处理信息下的所有回复；
+ * 发起人只能看到自己的回复；
  * 倩影的汇总回复不在此列，对所有可见者开放（详情页时间线的汇总节点）。 */
 function canSeeReply(u, m, r) {
   if (isAdmin(u) || isDispatcher(u)) return true;
+  if (isHandlerOf(u, m)) return true;
   return r.authorId === u.id;
 }
 

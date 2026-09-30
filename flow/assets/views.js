@@ -347,7 +347,9 @@ function wbListHtml() {
   const me = curUser();
   const list = wbList();
   if (!list.length) return empty('暂无符合条件的消息');
-  return wbTableHtml(list, me);
+  /* PC 端表格、手机端同款卡片，由 CSS 断点二选一显示 */
+  return '<div class="wb-pc">' + wbTableHtml(list, me) + '</div>' +
+    '<div class="wb-mb">' + list.map((m) => messageListCardHtml(m, me)).join('') + '</div>';
 }
 
 function renderWorkbench() {
@@ -1533,25 +1535,18 @@ function renderModal() {
   if (!modalState) return;
   const m = findMsg(modalState.msgId);
 
-  /* 标记为：发起人与李倩影都能标 已解决/未解决，两项恒可点，当前状态只做高亮 */
+  /* 标记为：发起人与李倩影都能标 已解决/未解决；打开时任何选项都不带选中态 */
   if (modalState.mode === 'tag') {
     const me = curUser();
     const isQy = isDispatcher(me) || isAdmin(me);
-    const rows = [
-      { tag: '已解决', on: m.status === 'closed' },
-      { tag: '未解决', on: m.status !== 'closed' }
-    ];
-    if (isQy) {
-      const current = m.tags || [];
-      MESSAGE_TAGS.forEach((tag) => rows.push({ tag: tag, on: current.includes(tag) }));
-    }
+    const rows = ['已解决', '未解决'];
+    if (isQy) MESSAGE_TAGS.forEach((tag) => rows.push(tag));
     document.getElementById('modal').innerHTML =
       '<div class="tag-modal-head"><b>标记为</b><span>' + (isQy ? '处理状态与业务标签' : '处理状态') + '</span></div>' +
-      '<div class="tag-choice-list">' + rows.map((row) =>
-        '<button type="button" class="tag-choice' + (row.on ? ' on' : '') + '"' +
-          ' onclick="applyMessageTag(\'' + m.id + '\',\'' + row.tag + '\')">' +
-          '<span>' + esc(row.tag) + '</span>' +
-          '<i>' + (row.on ? '当前' : '') + '</i>' +
+      '<div class="tag-choice-list">' + rows.map((tag) =>
+        '<button type="button" class="tag-choice"' +
+          ' onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +
+          '<span>' + esc(tag) + '</span>' +
         '</button>').join('') + '</div>';
     return;
   }
@@ -1944,7 +1939,8 @@ function commentAreaHtml(me, m) {
   const isFull = isAdmin(me) || isDispatcher(me);
   /* 发起人看不到处理人的中间回复，无可见回复时整张卡片不展示 */
   if (!threads.list.length && me.id === m.createdBy) return '';
-  const sub = isFull
+  const isHandler = !isFull && isHandlerOf(me, m);
+  const sub = (isFull || isHandler)
     ? threads.list.length + ' 条 · 按回复时间排序'
     : '我可见的 ' + threads.list.length + ' 条回复 · 他人中间回复仅李倩影可见';
   /* 标题与全部回复合入同一张卡片，回复线程之间用细线分隔 */
@@ -2184,7 +2180,7 @@ function renderDetail(id) {
       : '') +
   '</div>';
 
-  /* 评论流：按身份过滤，非分发人只见自己的回复 */
+  /* 评论流：分发人/管理员见全部回复，处理人见所处理信息的全部回复，发起人只见自己的回复 */
   const comments = '<div id="cmtArea">' + commentAreaHtml(me, m) + '</div>';
 
   /* 时间线：处理人的中间回复与办结动作仅分发人和本人可见 */

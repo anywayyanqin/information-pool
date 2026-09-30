@@ -138,8 +138,6 @@ body.detail-route .action-bar-spacer { height: 96px; }
   padding: 12px 14px; display: flex; align-items: center; justify-content: space-between;
   color: #344054; font-size: 14px; text-align: left; cursor: pointer;
 }
-.tag-choice.on { border-color: #84adff; background: #f5f8ff; color: #175cd3; }
-.tag-choice i { color: #2f6bff; font-size: 11px; font-style: normal; }
 .b-p_company  { background: #fff7e6; color: #fa8c16; }
 .b-p_exec     { background: #e9efff; color: #2f6bff; }
 .b-p_dept     { background: #f0ebff; color: #7b61ff; }
@@ -468,6 +466,8 @@ body.detail-route .action-bar-spacer { height: 96px; }
 .wb-table .t-time { white-space: nowrap; color: #b3bacb; font-size: 12px; }
 .wb-table .t-desc { max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #2b3346; }
 .wb-table .t-tags { max-width: 180px; }
+/* 手机端形态：同一份数据改用标准卡片，两套 DOM 由断点二选一显示 */
+.wb-mb { display: none; }
 
 /* ---------- 按钮 ---------- */
 .btn {
@@ -900,6 +900,10 @@ body.detail-route .action-bar-spacer { height: 96px; }
 @media (max-width: 860px) {
   .wb { flex-direction: column; }
   .confirm-row { flex-direction: column; }
+  /* 工作台：窄屏（手机/平板竖屏）改用卡片，不再横向滚表格 */
+  #msgList { overflow-x: visible; }
+  .wb-pc { display: none; }
+  .wb-mb { display: block; }
 }
 
 /* ==========================================================================
