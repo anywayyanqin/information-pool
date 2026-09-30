@@ -1554,17 +1554,21 @@ function renderModal() {
     return;
   }
 
-  /* 倩影汇总回复：新增或修改，最新一条为当前有效汇总 */
-  if (modalState.mode === 'summary') {
-    const target = modalState.summaryId ? summaryById(modalState.summaryId) : latestSummary(m.id);
+  /* 编辑回复：被指派人和李倩影共编同一条回复 */
+  if (modalState.mode === 'editReply') {
+    const r = S.replies.find((x) => x.id === modalState.replyId);
+    const linkRecipients = linksOf(m.id).flatMap((l) => recipientsOf(l));
+    const assigneeIds = [...new Set(linkRecipients.concat(r && r.authorId ? [r.authorId] : []))].filter((id) => id && id !== 'u_qy');
+    const assignees = assigneeIds.map(userName).filter(Boolean);
+    const assigneeText = assignees.length ? assignees.join('、') : '—';
     document.getElementById('modal').innerHTML =
-      '<h3>' + (modalState.summaryId ? '修改汇总回复' : '发布汇总回复') + '</h3>' +
-      '<div class="form-row"><textarea id="summaryText" placeholder="请汇总各处理池的结论，统一回复给提出人">' +
-        esc(target ? target.content : '') + '</textarea>' +
-        '<div class="form-hint">汇总回复对发起人及全部处理人可见；多次发布时以最新一条为当前有效汇总</div></div>' +
+      '<h3>编辑回复</h3>' +
+      '<div class="form-row"><textarea id="editReplyText" style="width:100%;min-height:120px;padding:10px;font-size:14px;border:1px solid #e3e8f2;border-radius:8px;outline:none;font-family:inherit;line-height:1.6" placeholder="请编辑回复内容">' +
+        esc(r ? r.content : '') + '</textarea>' +
+        '<div class="form-hint">被指派人（' + esc(assigneeText) + '）与李倩影共编同一条回复，各自的回复互相可见</div></div>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
-        '<button class="btn" onclick="saveSummary()">确定</button>' +
+        '<button class="btn" onclick="saveEditReply()">确定</button>' +
       '</div>';
     return;
   }
@@ -1657,23 +1661,22 @@ function renderModal() {
 /* ==========================================================================
  * 4. 消息详情
  * ========================================================================== */
-/* ---------- 倩影汇总回复：发布 / 修改，最新一条为当前有效汇总 ---------- */
-window.openSummaryModal = (msgId, summaryId) => {
-  const m = findMsg(msgId);
-  if (!m || !canManageSummary(curUser())) { toast('仅总池分发人可发布汇总回复'); return; }
-  modalState = { mode: 'summary', msgId, summaryId: summaryId || null };
+/* ---------- 编辑回复：被指派人和李倩影共编同一条回复 ---------- */
+window.openEditReplyModal = (msgId, replyId) => {
+  const r = S.replies.find((x) => x.id === replyId);
+  if (!r) return;
+  modalState = { mode: 'editReply', msgId, replyId };
   showModal();
 };
-window.saveSummary = () => {
-  if (!modalState || modalState.mode !== 'summary') return;
-  const el = document.getElementById('summaryText');
-  const text = el ? el.value : '';
-  const r = modalState.summaryId
-    ? editSummary(modalState.summaryId, text)
-    : publishSummary(modalState.msgId, text);
+window.saveEditReply = () => {
+  if (!modalState || modalState.mode !== 'editReply') return;
+  const el = document.getElementById('editReplyText');
+  const text = el ? el.value.trim() : '';
+  if (!text) { toast('请输入回复内容'); return; }
+  const r = editReply(modalState.msgId, modalState.replyId, text);
   if (!r.ok) { toast(r.msg); return; }
   closeModal();
-  toast(modalState.summaryId ? '汇总回复已更新' : '汇总回复已发布，发起人与处理人均可见');
+  toast('回复已更新');
   render();
 };
 
@@ -1816,12 +1819,13 @@ window.detailSearchKeydown = (event) => {
   }
 };
 
-/* ---------- 固定底栏（小红书式互动栏）：评论框 + 消息级点赞 + 评论数；标记/分享/分发等主动作并入右侧 ---------- */
+/* ---------- 固定底栏：若已有人回复，则剩下人仅能编辑回复，无法再更新/新增回复；若无人回复，则第一个打开的人可以说点什么并提交回复 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
-  const comment = '<div class="bar-comment">' +
+  const hasReply = repliesOf(m.id).length > 0;
+  const comment = !hasReply ? '<div class="bar-comment">' +
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
-  '</div>';
+  '</div>' : '';
   const acts = [];
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
   const flowIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10"></path><path d="M12 4l3 3-3 3"></path><path d="M19 17H9"></path><path d="M12 14l-3 3 3 3"></path></svg>';
@@ -1836,7 +1840,8 @@ function actionBarHtml(me, m) {
   if (canDispatch(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>分发</span></button>');
   }
-  const actions = acts.length ? '<div class="bar-actions">' + acts.join('') + '</div>' : '';
+  const actions = acts.length ? '<div class="bar-actions"' + (hasReply ? ' style="margin-left:auto"' : '') + '>' + acts.join('') + '</div>' : '';
+  if (!comment && !actions) return '';
   return '<div class="action-bar-spacer"></div>' +
     '<div class="action-bar"><div class="action-bar-inner">' +
       comment + actions +
@@ -1845,37 +1850,31 @@ function actionBarHtml(me, m) {
 
 function logText(l) {
   switch (l.action) {
-    case 'created': return l.note || '创建了消息';
-    case 'directed': return l.note || '直投到业务池负责人';
-    case 'dispatched': return l.note || '进行了分发';
-    case 'forwarded': return l.note || '进行了流转';
-    case 'shared': return l.note || '分享了消息';
-    case 'reply': return '在 ' + poolName(l.poolId) + ' 回复：' + (l.note || '');
-    case 'summary': return l.note || '发布汇总回复';
-    case 'summary_edit': return l.note || '修改汇总回复';
-    case 'auto':
-      if (l.note && l.note.indexOf('汇总') > -1) return l.note;
-      if (l.to === 'summarize') return '所有处理人已回复完成，等待李倩影汇总回复';
-      return l.note || '状态变更为「' + (MSG_STATUS[l.to] || l.to) + '」';
-    case 'closed': return l.note || '消息关闭';
-    case 'cancelled': return l.note || '消息取消';
-    default: return l.note || l.action;
+    case 'created':
+    case 'directed':
+      return '投递了消息';
+    case 'dispatched':
+      return l.note ? ('分发：' + l.note) : '进行了分发';
+    case 'reply':
+      return '发布了回复' + (l.note ? '：' + l.note : '');
+    case 'reply_edit':
+      return '编辑了回复' + (l.note ? '：' + l.note : '');
+    default:
+      return l.note || l.action;
   }
 }
 
 /* ---------- 评论流卡片：一条评论 + 其所有回复放在同一张卡片内 ----------
  * 一级评论作为卡片主体，嵌套回复紧跟在卡片内部的嵌套区域；
- * 每条回复（含主体）都有赞 / 回复按钮；处理结论由李倩影统一汇总回复给出。 */
+ * 每条回复（含主体）都有赞 / 回复按钮；被指派人和李倩影共编同一条回复。 */
 let replyBoxFor = null;
 
 function singleReplyRowHtml(me, m, r, orphanParent) {
   const au = userById(r.authorId) || {};
   const liked = (r.likedByUserIds || []).includes(me.id);
-  const childCount = S.replies.filter((x) => x.parentReplyId === r.id).length;
-  const box = replyBoxFor === r.id
-    ? '<div class="cmt-reply-box"><input id="cinput_' + r.id + '" placeholder="回复 ' + esc(au.name || '') + '">' +
-      '<button class="btn btn-sm" style="height:36px" onclick="submitCommentReply(\'' + m.id + '\',\'' + r.id + '\')">发送</button></div>'
-    : '';
+  const canEdit = typeof canEditReply === 'function' ? canEditReply(me, m, r) : false;
+  const lastEditor = r.lastEditorId && r.lastEditorId !== r.authorId ? userById(r.lastEditorId) : null;
+  const editedTag = r.updatedAt && r.updatedAt !== r.at ? '<span class="cmt-confirm-tag" style="background:#eef3ff;color:#2f6bff">已编辑' + (lastEditor ? ' by ' + esc(lastEditor.name) : '') + '</span>' : '';
   return '<div class="cmt-row" id="cmtrow_' + r.id + '">' +
     '<div class="avatar">' + esc((au.name || '?').slice(0, 1)) + '</div>' +
     '<div class="cmt-body">' +
@@ -1883,15 +1882,15 @@ function singleReplyRowHtml(me, m, r, orphanParent) {
         '<span class="rname">' + esc(au.name || '') + '</span>' +
         '<span>' + esc(ROLES[au.role] || '') + '</span>' +
         '<span>' + fmtTime(r.at) + '</span>' +
+        editedTag +
         (orphanParent ? '<span class="cmt-confirm-tag">回复他人</span>' : '') +
       '</div>' +
       '<div class="reply-content">' + esc(r.content) + '</div>' +
       attsHtml(r.attachments) +
       '<div class="cmt-foot">' +
         '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">' + (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0) + '</button>' +
-        '<button class="like-btn" onclick="toggleCommentBox(\'' + m.id + '\',\'' + r.id + '\')">回复' + (childCount ? ' ' + childCount : '') + '</button>' +
+        (canEdit ? '<button class="like-btn" onclick="openEditReplyModal(\'' + m.id + '\',\'' + r.id + '\')">编辑</button>' : '') +
       '</div>' +
-      box +
     '</div>' +
   '</div>';
 }
@@ -1979,6 +1978,10 @@ function mentionCandidates(m) {
 window.openCommentPanel = (msgId) => {
   const m = findMsg(msgId);
   if (!m) return;
+  if (repliesOf(m.id).length > 0) {
+    toast('已有人回复，请直接点击编辑修改回复');
+    return;
+  }
   cmtPanel = { msgId, content: '', atts: [], recording: false, showAt: false, atKw: '', showImg: false };
   document.getElementById('cmtMask').classList.add('show');
   document.getElementById('cmtPanel').classList.add('show');
@@ -2087,6 +2090,11 @@ window.submitCommentPanel = () => {
   if (!content && !st.atts.length) { toast('请输入评论内容'); return; }
   const me = curUser();
   const m = findMsg(st.msgId);
+  if (repliesOf(st.msgId).length > 0) {
+    toast('已有人回复，无法再新增回复，请直接编辑回复');
+    closeCommentPanel();
+    return;
+  }
   const link = !isEnded(m) ? myActiveUnsubmittedLink(me, m) : null;
   if (link && canForward(me, m, link)) {
     closeCommentPanel();
@@ -2186,15 +2194,13 @@ function renderDetail(id) {
   /* 评论流：分发人/管理员见全部回复，处理人见所处理信息的全部回复，发起人只见自己的回复 */
   const comments = '<div id="cmtArea">' + commentAreaHtml(me, m) + '</div>';
 
-  /* 时间线：处理人的中间回复与办结动作仅分发人和本人可见 */
-  const isFull = isAdmin(me) || isDispatcher(me);
+  /* 全局时间线：展示流转日志 */
   const logs = visibleLogs(me, m);
   const timeline = '<div class="card"><div class="card-title">' +
-    (isFull ? '全局时间线' : '关键节点时间线') +
-    '<span class="sub">' + (isFull ? '分发动作、处理人回复与汇总回复全量记录' : '仅展示投递、分发与汇总回复等关键节点') + '</span></div>' +
+    '全局时间线' +
+    '<span class="sub">流转日志</span></div>' +
     (logs.length ? logs.map((l) => {
-      const key = ['created', 'directed', 'dispatched', 'forwarded', 'summary', 'closed', 'cancelled'].includes(l.action);
-      return '<div class="tl-item' + (key ? ' tl-key' : '') + '">' +
+      return '<div class="tl-item tl-key">' +
         '<div class="tl-text"><b>' + esc(userName(l.actorId)) + '</b> ' + esc(logText(l)) + '</div>' +
         '<div class="tl-time">' + fmtTime(l.at) + '</div></div>';
     }).join('') : empty('暂无记录')) + '</div>';

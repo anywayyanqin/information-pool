@@ -217,13 +217,21 @@ function visibleReplies(u, m) {
   return repliesOf(m.id).filter((r) => canSeeReply(u, m, r));
 }
 
-/* 当前用户在时间线中可见的日志：处理人回复仅分发人与本人可见 */
+/* 能否编辑回复：被指派人和李倩影共编同一条回复 */
+function canEditReply(u, m, r) {
+  if (!u || !m || !r) return false;
+  if (isAdmin(u) || isDispatcher(u) || u.id === 'u_qy') return true;
+  if (isHandlerOf(u, m)) return true;
+  if (r.authorId === u.id) return true;
+  const linkRecipients = linksOf(m.id).flatMap((l) => recipientsOf(l));
+  if (linkRecipients.includes(u.id)) return true;
+  return false;
+}
+
+/* 当前用户在全局时间线中可见的流转日志：只展示谁投递、谁分发、谁发布回复、谁编辑回复 */
 function visibleLogs(u, m) {
-  return logsOf(m.id).filter((l) => {
-    if (isAdmin(u) || isDispatcher(u)) return true;
-    if (l.action === 'reply') return l.actorId === u.id;
-    return true;
-  });
+  const allowed = ['created', 'directed', 'dispatched', 'reply', 'reply_edit'];
+  return logsOf(m.id).filter((l) => allowed.includes(l.action));
 }
 
 /* 能否回复：未终结的消息，本人是该池在办链路的收件人（或被分享/发起人普通留言） */

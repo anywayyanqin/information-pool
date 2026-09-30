@@ -13,7 +13,7 @@
  * ========================================================================== */
 
 const LS_KEY = 'flow_state_v6';
-const SEED_VERSION = 7;
+const SEED_VERSION = 9;
 let S = null;
 
 /* ---------- 持久化 ---------- */
@@ -38,7 +38,10 @@ function loadState() {
   if (S && Array.isArray(S.messages)) {
     S.messages.forEach((m) => { if (!Array.isArray(m.tags)) m.tags = []; });
   }
-  if (!Array.isArray(S.summaries)) S.summaries = [];
+  if (S && Array.isArray(S.logs)) {
+    S.logs = S.logs.filter((l) => l.action !== 'summary' && l.action !== 'summary_edit');
+  }
+  S.summaries = [];
 }
 function saveState() { localStorage.setItem(LS_KEY, JSON.stringify(S)); }
 function resetState() {
@@ -519,6 +522,9 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canSeeMessage(me, m)) return { ok: false, msg: '无权评论该消息' };
+  if (repliesOf(msgId).length > 0) {
+    return { ok: false, msg: '已有人回复，无法再新增回复，请直接编辑回复' };
+  }
   const link = myLinkInPool(msgId, me.id, poolId);
   const parent = parentReplyId ? S.replies.find((x) => x.id === parentReplyId) : null;
   const r = {
@@ -537,6 +543,27 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   sendWeComNotification(notify, me.name + ' 回复了 ' + m.no + '《' + m.title + '》', m.id, 'reply', me.id);
   saveState();
   return { ok: true };
+}
+
+/* ---------- 动作：编辑回复（被指派人和李倩影共编同一条回复，流转日志记录谁编辑回复） ---------- */
+function editReply(msgId, replyId, content) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  const r = S.replies.find((x) => x.id === replyId);
+  if (!m || !r) return { ok: false, msg: '回复不存在' };
+  const text = (content || '').trim();
+  if (!text) return { ok: false, msg: '请输入回复内容' };
+  r.content = text;
+  r.updatedAt = Date.now();
+  r.lastEditorId = me.id;
+  m.updatedAt = Date.now();
+  addLog(m.id, me.id, 'reply_edit', {
+    replyId: r.id,
+    poolId: r.poolId,
+    note: text
+  });
+  saveState();
+  return { ok: true, reply: r };
 }
 
 /* ---------- 动作：分享（轻量抄送）——被分享人可查看并回复，但不建链路、不进待办、不承担确认义务 ---------- */
@@ -611,7 +638,6 @@ function resolveMessage(msgId) {
   if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人本人可以标记已解决' };
   if (isDispatcher(me) || isAdmin(me)) {
     if (!allHandlersReplied(m)) return { ok: false, msg: '还有处理人未回复，暂不能标记已解决' };
-    if (!latestSummary(m.id)) return { ok: false, msg: '请先发布汇总回复，再标记已解决' };
   }
   const now = Date.now();
   linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {

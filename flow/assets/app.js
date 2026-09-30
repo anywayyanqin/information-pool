@@ -45,7 +45,7 @@ function renderBottomNav() {
   const hash = location.hash || '#/workbench';
   const unread = typeof unreadNotificationCount === 'function' ? unreadNotificationCount() : 0;
   const items = [
-    { path: '#/workbench', label: '工作台', icon: 'work' },
+    { path: '#/workbench', label: '我的提议', icon: 'work' },
     { path: '#/new', label: '填报', action: true },
     { path: '#/notifications', label: '消息', icon: 'bell', badge: unread }
   ];

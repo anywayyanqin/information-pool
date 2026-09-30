@@ -389,28 +389,21 @@ function buildSeed() {
   ];
 
   const replies = [
-    { id: 'rp1', messageId: 'm1', poolId: 'p_retail_east', linkId: 'lk1', authorId: 'u_ls', parentReplyId: null, content: '已与客户确认场外期权报价所需材料，可安排报价。', attachments: [], at: T(47), likeCount: 1, likedByUserIds: ['u_zs'] },
+    { id: 'rp1', messageId: 'm1', poolId: 'p_retail_east', linkId: 'lk1', authorId: 'u_ls', parentReplyId: null, content: '已与客户确认场外期权报价所需材料，可安排报价。客户诉求已闭环。', attachments: [], at: T(47), updatedAt: T(44), lastEditorId: 'u_qy', likeCount: 1, likedByUserIds: ['u_zs'] },
     { id: 'rp2', messageId: 'm2', poolId: 'p_ind_black', linkId: 'lk3', authorId: 'u_hw', parentReplyId: null, content: '已核对，统一按交易所口径更新，详见附件。', attachments: [{ name: '口径说明.docx', size: 12400 }], at: T(26), likeCount: 2, likedByUserIds: ['u_zs', 'u_zm'] },
     { id: 'rp3', messageId: 'm5', poolId: 'p_intl_dept', linkId: 'lk4', authorId: 'u_cl', parentReplyId: null, content: '已定位到跨境短信通道抖动，正在与供应商确认。', attachments: [], at: T(6), likeCount: 0, likedByUserIds: [] },
     { id: 'rp4', messageId: 'm6', poolId: 'p_inst_1', linkId: 'lk5', authorId: 'u_wd', parentReplyId: null, content: '已安排客户经理对接路演时间。', attachments: [], at: T(50), likeCount: 0, likedByUserIds: [] },
     { id: 'rp5', messageId: 'm7', poolId: 'p_buy_quant', linkId: 'lk7', authorId: 'u_s7', parentReplyId: null, content: '账单差异为交割月调整，已与客户财务确认无误。', attachments: [], at: T(63), likeCount: 1, likedByUserIds: ['u_qy'] },
-    { id: 'rp6', messageId: 'm9', poolId: 'p_other_general', linkId: 'lk8', authorId: 'u_mxf', parentReplyId: null, content: '资产配置建议初稿已成型，明日补充套保比例测算。', attachments: [], at: T(2), likeCount: 0, likedByUserIds: [] },
-    { id: 'rp7', messageId: 'm1', poolId: 'p_retail_east', linkId: 'lk1', authorId: 'u_zs', parentReplyId: 'rp1', content: '收到，已转告客户准备材料。', attachments: [], at: T(46), likeCount: 0, likedByUserIds: [] }
+    { id: 'rp6', messageId: 'm9', poolId: 'p_other_general', linkId: 'lk8', authorId: 'u_mxf', parentReplyId: null, content: '资产配置建议初稿已成型，明日补充套保比例测算。', attachments: [], at: T(2), likeCount: 0, likedByUserIds: [] }
   ];
 
-  /* 倩影汇总回复：一条消息可多次发布、可编辑，最新一条为当前有效汇总 */
-  const summaries = [
-    { id: 'sm1', messageId: 'm1', authorId: 'u_qy', content: '已汇总：华东零售组确认客户材料齐备，可安排场外期权报价；客户诉求已闭环。', at: T(45), updatedAt: T(44), edits: 1 },
-    { id: 'sm2', messageId: 'm7', authorId: 'u_qy', content: '初步汇总：账单差异原因已定位为交割月调整，待客户书面确认后结束。', at: T(62), updatedAt: T(62), edits: 0 },
-    { id: 'sm3', messageId: 'm7', authorId: 'u_qy', content: '最终汇总：量化私募部已完成账单核对并与客户财务确认无误，本条信息已完成。', at: T(60), updatedAt: T(60), edits: 0 }
-  ];
+  const summaries = [];
 
   const logs = [
     { id: 'lg1',  messageId: 'm1', at: T(50), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到零售池' },
     { id: 'lg2',  messageId: 'm1', at: T(49), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 华东零售组（负责人 李四），抄送 零售客户服务部（陈晨、于芳）' },
     { id: 'lg3',  messageId: 'm1', at: T(47), actorId: 'u_ls',  action: 'reply',           poolId: 'p_retail_east', note: '已与客户确认场外期权报价所需材料，可安排报价。' },
-    { id: 'lg4',  messageId: 'm1', at: T(45), actorId: 'u_qy',  action: 'summary',         note: '发布汇总回复：已汇总：华东零售组确认客户材料齐备…' },
-    { id: 'lg5',  messageId: 'm1', at: T(44), actorId: 'u_qy',  action: 'summary_edit',    note: '修改汇总回复' },
+    { id: 'lg4',  messageId: 'm1', at: T(44), actorId: 'u_qy',  action: 'reply_edit',      poolId: 'p_retail_east', note: '已与客户确认场外期权报价所需材料，可安排报价。客户诉求已闭环。' },
 
     { id: 'lg7',  messageId: 'm2', at: T(30), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到产业池' },
     { id: 'lg8',  messageId: 'm2', at: T(29), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 产业服务部（负责人 周明），抄送 产业池（闻勇翔、邵嵬敏）' },
@@ -432,8 +425,6 @@ function buildSeed() {
     { id: 'lg21', messageId: 'm7', at: T(70), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到买方池' },
     { id: 'lg22', messageId: 'm7', at: T(69), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 量化私募部（负责人 孙七），抄送 买方池（王冀湘、房迪恺）' },
     { id: 'lg23', messageId: 'm7', at: T(63), actorId: 'u_s7',  action: 'reply',           poolId: 'p_buy_quant', note: '账单差异为交割月调整，已与客户财务确认无误。' },
-    { id: 'lg25', messageId: 'm7', at: T(62), actorId: 'u_qy',  action: 'summary',         note: '发布汇总回复：初步汇总：账单差异原因已定位为交割月调整…' },
-    { id: 'lg26', messageId: 'm7', at: T(60), actorId: 'u_qy',  action: 'summary',         note: '发布汇总回复：最终汇总：量化私募部已完成账单核对…' },
 
     { id: 'lg27', messageId: 'm8', at: T(20), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到财富池' },
     { id: 'lg28', messageId: 'm9', at: T(4),  actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到其他池' },
