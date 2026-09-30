@@ -243,9 +243,12 @@ function canForward(u, m, link) {
   return !!pool && childPools(pool.id).length > 0;
 }
 
-/* 底栏「标记为」按钮可见者：李倩影（状态+业务标签）与发起人本人（仅状态） */
+/* 底栏「标记为」按钮可见者：李倩影（状态+业务标签）随时可点；
+ * 发起人只在流程已解决后可操作（提交人确认标签），打标不改流程状态 */
 function canMarkMessage(u, m) {
-  return !!u && !!m && (isDispatcher(u) || isAdmin(u) || u.id === m.createdBy);
+  if (!u || !m || m.status === 'cancelled') return false;
+  if (isDispatcher(u) || isAdmin(u)) return true;
+  return u.id === m.createdBy && m.status === 'closed';
 }
 
 /* 标记已解决：李倩影与发起人本人，不要求先有处理人回复 */

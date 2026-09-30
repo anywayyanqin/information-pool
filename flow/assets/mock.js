@@ -76,12 +76,12 @@ const ORGS = [
 /* ---------- 池类型 / 状态文案 ---------- */
 const POOL_TYPES = { biz: '业务池', dept: '部门池', group: '小组池' };
 
-/* 总消息状态机：待分发 → 处理中 → 待汇总 → 已完成 */
+/* 总消息状态机：待分发 → 处理中 → 待汇总 → 已解决 */
 const MSG_STATUS = {
   dispatch: '待分发',
   handling: '处理中',
   summarize: '待汇总',
-  closed: '已完成',
+  closed: '已解决',
   cancelled: '已取消'
 };
 

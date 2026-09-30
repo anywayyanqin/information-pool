@@ -24,20 +24,48 @@ function badge(status) { return '<span class="badge b-' + status + '">' + (MSG_S
 
 /* 流程是否已结束：倩影发布汇总回复后即视为结束 */
 function isEnded(m) { return m.status === 'closed' || m.status === 'cancelled'; }
-/* 主流程状态（相对当前身份）：待分发 / 待办 / 已办 / 已解决
- * 投递即直投业务池负责人+秘书，「待分发」只留给池内无可投负责人的兜底场景 */
+/* 是否有处理人（链路收件人）给过回复：李倩影的「待汇总」与「已办」以它分界 */
+function hasHandlerReply(m) {
+  const ids = linksOf(m.id).flatMap((l) => recipientsOf(l));
+  return repliesOf(m.id).some((r) => ids.includes(r.authorId));
+}
+/* 主流程状态（相对当前身份），计算优先级：已解决 > 待办 > 待分发 > 已办。
+ * 「我发起的」不参与主状态计算，作为附加标签并存。 */
 function flowStatus(m, me) {
-  if (isEnded(m)) return 'ended';
-  if (m.status === 'dispatch') return 'dispatch';
-  /* 李倩影：直投后尚无人回复的消息由她与业务池负责人共同跟进 */
-  if ((isDispatcher(me) || isAdmin(me)) && !repliesOf(m.id).length) return 'todo';
+  if (isEnded(m)) return 'ended';                                  /* 李倩影已打标「已解决」 */
+  const full = isDispatcher(me) || isAdmin(me);
+  if (full) {
+    /* 李倩影：分发前待分发；有处理人回复即待汇总（待办）；她本人被流转且未回复也是待办；
+     * 已分发但无人回复＝已办（等处理人回复） */
+    if (m.status === 'dispatch') return 'dispatch';
+    if (hasHandlerReply(m) || myActiveUnsubmittedLink(me, m)) return 'todo';
+    return 'done';
+  }
+  /* 发起人与处理人：只有轮到自己行动（尚未提交回复）才是待办；「待分发」对其不显示 */
   if (myActiveUnsubmittedLink(me, m)) return 'todo';
   return 'done';
 }
-/* 状态徽章（卡片/详情头部只展示主流程状态） */
+/* 附加标签：来源「我发起的」与独立的提交人确认标签（不改流程状态） */
+function extraStatusChipsHtml(m, me) {
+  const chips = [];
+  if (m.createdBy === me.id) chips.push('<span class="badge b-mine">我发起的</span>');
+  if (isEnded(m)) {
+    const mark = m.resolveMark || '未确认';
+    const cls = mark === '已解决' ? 'b-closed' : mark === '未解决' ? 'b-reopened' : 'b-pending';
+    chips.push('<span class="badge ' + cls + '">提交人' + esc(mark) + '</span>');
+  }
+  return chips.join('');
+}
+/* 卡片与详情头部的状态标签：流程未结束一律显示「办理中」，李倩影标记解决后才显示「已解决」。
+ * 待分发/待办/已办只用于工作台标签分区与状态筛选，不再出现在卡片上。 */
+function cardStatusBadgeHtml(m) {
+  if (m.status === 'closed') return '<span class="badge b-ended">已解决</span>';
+  if (m.status === 'cancelled') return '<span class="badge b-cancelled">已取消</span>';
+  return '<span class="badge b-handling">办理中</span>';
+}
+/* 状态徽章（卡片/详情头部只展示状态标签 + 附加标签） */
 function flowBadge(m, me) {
-  const s = flowStatus(m, me);
-  return '<span class="badge b-' + s + '">' + FLOW_STATUS[s] + '</span>';
+  return cardStatusBadgeHtml(m) + extraStatusChipsHtml(m, me);
 }
 function attsHtml(atts) {
   if (!atts || !atts.length) return '';
@@ -85,11 +113,19 @@ function visibleMessages() {
   const me = curUser();
   return S.messages.filter((m) => canSeeMessage(me, m));
 }
-/* 消息当前是否挂在某池：链路指向该池，或尚未分发且投递到该池 */
+/* 消息当前是否挂在某池：链路指向该池或其下部门/小组池，或尚未分发且投递在该池下 */
+function poolCovers(filterId, targetId) {
+  let cur = poolById(targetId);
+  while (cur) {
+    if (cur.id === filterId) return true;
+    cur = cur.parentId ? poolById(cur.parentId) : null;
+  }
+  return false;
+}
 function msgInPool(m, poolId) {
   if (poolId === 'all') return true;
-  if (linksOf(m.id).some((l) => l.poolId === poolId)) return true;
-  return !linksOf(m.id).length && m.sourcePoolId === poolId;
+  if (linksOf(m.id).some((l) => poolCovers(poolId, l.poolId))) return true;
+  return !linksOf(m.id).length && poolCovers(poolId, m.sourcePoolId);
 }
 
 /* ---------- 池树渲染（仅池管理展示用，纯展示树形结构与池名称） ---------- */
@@ -119,26 +155,11 @@ let wbKw = '';
 let wbSortKey = 'updatedAt';   /* 表格列头排序，默认按最近更新倒序 */
 let wbSortDir = -1;
 
+/* 工作台筛选栏固定 6 个标签；「待分发」只有李倩影视角可见（其余角色该态并入已办） */
 function wbTabs() {
-  if (isDispatcher(curUser())) {
-    return [
-      { key: 'all', name: '全部' },
-      { key: 'dispatch', name: '待分发' },
-      { key: 'todo', name: '待办' },
-      { key: 'done', name: '已办' },
-      { key: 'ended', name: '已解决' },
-      { key: 'overdue', name: '超时' },
-      { key: 'mine', name: '我发起的' }
-    ];
-  }
-  return [
-    { key: 'all', name: '全部' },
-    { key: 'todo', name: '待办' },
-    { key: 'done', name: '已办' },
-    { key: 'ended', name: '已解决' },
-    { key: 'overdue', name: '超时' },
-    { key: 'mine', name: '我发起的' }
-  ];
+  const tabs = [{ key: 'all', name: '全部' }, { key: 'mine', name: '我发起的' }];
+  if (isDispatcher(curUser()) || isAdmin(curUser())) tabs.push({ key: 'dispatch', name: '待分发' });
+  return tabs.concat([{ key: 'todo', name: '待办' }, { key: 'done', name: '已办' }, { key: 'ended', name: '已解决' }]);
 }
 function effectiveWbTab() {
   const keys = wbTabs().map((t) => t.key);
@@ -151,13 +172,9 @@ function wbTabCount(key) {
   let list = visibleMessages();
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
-  if (key === 'dispatch') return list.filter((m) => m.status === 'dispatch').length;
-  if (key === 'todo') return list.filter((m) => flowStatus(m, me) === 'todo').length;
-  if (key === 'done') return list.filter((m) => flowStatus(m, me) === 'done').length;
-  if (key === 'ended') return list.filter((m) => flowStatus(m, me) === 'ended').length;
-  if (key === 'overdue') return list.filter((m) => isMessageOverdue(m)).length;
   if (key === 'mine') return list.filter((m) => m.createdBy === me.id).length;
-  return list.length;
+  if (key === 'all') return list.length;
+  return list.filter((m) => flowStatus(m, me) === key).length;
 }
 
 /* 表格列头排序：编号/提议类型/发起人/时间/详细描述可排；状态/标签/当前处理人只是徽标展示，不参与排序 */
@@ -178,17 +195,11 @@ function wbList() {
   const me = curUser();
   const tab = effectiveWbTab();
   let list = visibleMessages();
-  /* 待分发区：投递即直投业务池负责人，只有池内无可投负责人时才会留在这一态 */
-  if (tab === 'dispatch') list = list.filter((m) => m.status === 'dispatch');
-  /* 主流程状态（相对当前身份）：待办 / 已办 / 已结束 */
-  else if (tab === 'todo') list = list.filter((m) => flowStatus(m, me) === 'todo');
-  else if (tab === 'done') list = list.filter((m) => flowStatus(m, me) === 'done');
-  else if (tab === 'ended') list = list.filter((m) => flowStatus(m, me) === 'ended');
-  else if (tab === 'overdue') list = list.filter((m) => isMessageOverdue(m));
-  else if (tab === 'mine') list = list.filter((m) => m.createdBy === me.id);
+  /* 六个标签按主流程状态分区；「我发起的」按来源过滤，可与其他状态并存 */
+  if (tab === 'mine') list = list.filter((m) => m.createdBy === me.id);
+  else if (tab !== 'all') list = list.filter((m) => flowStatus(m, me) === tab);
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
-  if (wbStatus === 'overdue') list = list.filter((m) => isMessageOverdue(m));
-  else if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
+  if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
   if (wbKw) list = list.filter((m) => msgKeywordMatch(m, wbKw));
   const sorter = WB_SORTERS[wbSortKey] || WB_SORTERS.updatedAt;
@@ -355,13 +366,12 @@ function wbListHtml() {
 function renderWorkbench() {
   const me = curUser();
   const tab = effectiveWbTab();
-  const statusList = [
-    ['dispatch', '待分发'], ['todo', '待办'], ['done', '已办'],
-    ['ended', '已解决'], ['overdue', '超时']
-  ];
+  const statusList = (isDispatcher(me) || isAdmin(me) ? [['dispatch', '待分发']] : [])
+    .concat([['todo', '待办'], ['done', '已办'], ['ended', '已解决']]);
   const statusOpts = statusList.map((item) =>
     '<option value="' + item[0] + '"' + (wbStatus === item[0] ? ' selected' : '') + '>' + item[1] + '</option>').join('');
-  const poolOpts = '<option value="all">全部池</option>' + orderedPoolsFlat().map((p) =>
+  /* 池筛选与池管理页的「目标池」口径一致：只列一级业务池，选中即连带其下部门/小组 */
+  const poolOpts = '<option value="all">全部池</option>' + bizPools().map((p) =>
     '<option value="' + p.id + '"' + (wbPool === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
   const tagNames = [...new Set(MESSAGE_TAGS.concat(S.messages.flatMap((m) => m.tags || [])))];
   const tagOpts = '<option value="">全部标签</option>' + tagNames.map((tag) =>
@@ -946,8 +956,16 @@ window.applyMessageTag = (msgId, tag) => {
   const m = findMsg(msgId);
   if (!m) return;
   if (tag === '已解决' || tag === '未解决') {
+    const me = curUser();
     closeModal();
-    /* 两项都始终可点：已是当前状态时只提示，不重复改状态 */
+    /* 发起人：只记录在时间线上，不改状态、不重新拉起处理 */
+    if (!isDispatcher(me) && !isAdmin(me)) {
+      const r = recordResolveMark(msgId, tag);
+      toast(r.ok ? r.msg + '（不影响流转）' : r.msg);
+      if (r.ok) render();
+      return;
+    }
+    /* 李倩影：仍然驱动状态机，两项都始终可点，已是当前状态时只提示 */
     if ((m.status === 'closed') === (tag === '已解决')) { toast('当前已是' + tag); return; }
     const result = tag === '已解决' ? resolveMessage(msgId) : reopenMessage(msgId);
     if (!result.ok) { toast(result.msg); return; }
@@ -1542,7 +1560,7 @@ function renderModal() {
     const rows = ['已解决', '未解决'];
     if (isQy) MESSAGE_TAGS.forEach((tag) => rows.push(tag));
     document.getElementById('modal').innerHTML =
-      '<div class="tag-modal-head"><b>标记为</b><span>' + (isQy ? '处理状态与业务标签' : '处理状态') + '</span></div>' +
+      '<div class="tag-modal-head"><b>标记为</b><span>' + (isQy ? '处理状态与业务标签' : '提交人确认（不改变流程状态）') + '</span></div>' +
       '<div class="tag-choice-list">' + rows.map((tag) =>
         '<button type="button" class="tag-choice"' +
           ' onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +

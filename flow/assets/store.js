@@ -597,11 +597,22 @@ function toggleMsgLike(msgId, userId) {
 }
 
 /* ---------- 动作：标记整条信息已解决（李倩影与发起人本人） ---------- */
+/* 李倩影手动标已解决的前置：所有最终链路的处理人都已回复，且她已发布过汇总 */
+function allHandlersReplied(m) {
+  const finals = finalLinksOf(m.id);
+  if (!finals.length) return false;
+  return !finals.some((l) => l.status === 'pending' || l.status === 'processing');
+}
+
 function resolveMessage(msgId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人本人可以标记已解决' };
+  if (isDispatcher(me) || isAdmin(me)) {
+    if (!allHandlersReplied(m)) return { ok: false, msg: '还有处理人未回复，暂不能标记已解决' };
+    if (!latestSummary(m.id)) return { ok: false, msg: '请先发布汇总回复，再标记已解决' };
+  }
   const now = Date.now();
   linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
     link.status = 'resolved';
@@ -636,6 +647,23 @@ function reopenMessage(msgId) {
   sendWeComNotification(participantIds(m), m.no + ' 已由' + me.name + '标记未解决，请相关处理人继续跟进', m.id, 'assign', me.id);
   saveState();
   return { ok: true };
+}
+
+/* 提交人确认标签：只在流程「已解决」后可操作，且不改变流程状态——
+ * 状态机的开关仍由李倩影的打标与汇总回复决定。 */
+function recordResolveMark(msgId, mark) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (mark !== '已解决' && mark !== '未解决') return { ok: false, msg: '标记只能为已解决或未解决' };
+  if (m.status !== 'closed') return { ok: false, msg: '流程尚未结束，待李倩影标记已解决后再确认' };
+  if (m.resolveMark === mark) return { ok: false, msg: '当前记录已是' + mark };
+  m.resolveMark = mark;
+  m.resolveMarkAt = Date.now();
+  m.updatedAt = m.resolveMarkAt;
+  addLog(m.id, me.id, 'resolve_mark', { note: me.name + '标记信息为「' + mark + '」（仅作记录，不影响流转）' });
+  saveState();
+  return { ok: true, msg: '已记录为' + mark };
 }
 
 /* ---------- 动作：取消消息（提出人） ---------- */
