@@ -45,27 +45,12 @@ function flowStatus(m, me) {
   if (myActiveUnsubmittedLink(me, m)) return 'todo';
   return 'done';
 }
-/* 附加标签：来源「我发起的」与独立的提交人确认标签（不改流程状态） */
-function extraStatusChipsHtml(m, me) {
-  const chips = [];
-  if (m.createdBy === me.id) chips.push('<span class="badge b-mine">我发起的</span>');
-  if (isEnded(m)) {
-    const mark = m.resolveMark || '未确认';
-    const cls = mark === '已解决' ? 'b-closed' : mark === '未解决' ? 'b-reopened' : 'b-pending';
-    chips.push('<span class="badge ' + cls + '">提交人' + esc(mark) + '</span>');
-  }
-  return chips.join('');
-}
 /* 卡片与详情头部的状态标签：流程未结束一律显示「办理中」，李倩影标记解决后才显示「已解决」。
  * 待分发/待办/已办只用于工作台标签分区与状态筛选，不再出现在卡片上。 */
 function cardStatusBadgeHtml(m) {
   if (m.status === 'closed') return '<span class="badge b-ended">已解决</span>';
   if (m.status === 'cancelled') return '<span class="badge b-cancelled">已取消</span>';
   return '<span class="badge b-handling">办理中</span>';
-}
-/* 状态徽章（卡片/详情头部只展示状态标签 + 附加标签） */
-function flowBadge(m, me) {
-  return cardStatusBadgeHtml(m) + extraStatusChipsHtml(m, me);
 }
 function attsHtml(atts) {
   if (!atts || !atts.length) return '';
@@ -305,7 +290,7 @@ function messageListCardHtml(m, me) {
   return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
     '<div class="msg-row-top">' +
       '<span class="msg-no">' + esc(m.no) + '</span>' +
-      flowBadge(m, me) +
+      cardStatusBadgeHtml(m) +
       (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handler) + '</span>') +
     '</div>' +
     messageTagLineHtml(m) +
@@ -342,7 +327,7 @@ function wbTableHtml(list, me) {
     const src = proposalTypeText(m);
     return '<tr onclick="openMessage(\'' + m.id + '\')">' +
       '<td class="t-no">' + esc(m.no) + '</td>' +
-      '<td>' + flowBadge(m, me) + '</td>' +
+      '<td>' + cardStatusBadgeHtml(m) + '</td>' +
       '<td>' + esc(src || '—') + '</td>' +
       '<td class="t-tags">' + (messageTagsHtml(m) || '—') + '</td>' +
       '<td>' + esc(isEnded(m) ? '—' : handler) + '</td>' +
@@ -2174,7 +2159,7 @@ function renderDetail(id) {
   const targets = dispatchTargetsText(m);
   const head = '<div class="card detail-head">' +
     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
-      '<span class="detail-no">' + m.no + '</span>' + flowBadge(m, me) + messageTagsHtml(m) +
+      '<span class="detail-no">' + m.no + '</span>' + cardStatusBadgeHtml(m) + messageTagsHtml(m) +
       (m.closedAt ? '<span class="msg-meta">关闭于 ' + fmtTime(m.closedAt) + '</span>' : '') +
     '</div>' +
     '<h2>' + esc(m.title) + '</h2>' +
