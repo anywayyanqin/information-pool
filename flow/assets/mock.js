@@ -457,7 +457,8 @@ function buildSeed() {
   ];
 
   return {
-    v: 4, seq: 6,
+    /* seq 必须跟着种子消息走：写死过 6 而消息有 9 条，导致新建消息编号撞上 M-0007~M-0009 */
+    v: 4, seq: messages.reduce((n, m) => Math.max(n, m.seq || 0), 0),
     pools, messages, links, replies, summaries, logs, notifications, poolApps
   };
 }

@@ -48,6 +48,12 @@ function loadState() {
     }
     S.buyerOwnerFixedAt = Date.now();
   }
+  /* 已存存档的 seq 可能落后于消息（fork 早期种子写死 seq:6 却发了 9 条消息，新建时撞号）：
+   * 只把计数器抬到最大已用值，已发出的编号一律不改 */
+  if (S && Array.isArray(S.messages) && S.messages.length) {
+    const maxSeq = S.messages.reduce((n, m) => Math.max(n, m.seq || 0), 0);
+    if ((S.seq || 0) < maxSeq) S.seq = maxSeq;
+  }
   if (S && Array.isArray(S.messages)) {
     S.messages.forEach((m) => {
       if (!Array.isArray(m.tags)) m.tags = [];
