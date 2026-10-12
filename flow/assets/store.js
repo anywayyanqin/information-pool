@@ -104,23 +104,21 @@ function nodeSecretaryNames(pool) { return (pool.secretaryIds || []).map(userNam
 function recipientsOf(l) { return l.recipientIds || (l.handlerId ? [l.handlerId] : []); }
 function ccOf(l) { return l.ccIds || []; }
 
-/* 联合回复参与人：固定取该回复所属分发链路的收件人。
- * 任一成员提交或编辑后，都视为这组人的联合回复；后续链路变化不影响已记录名单。 */
+/* 联合回复参与人：整条消息一条联合回复，协作者按**当前**分发链路实时计算
+ * （该消息上所有链路及其父链路的收件人都是协作者），
+ * 所以分发之后才进来的人也能直接编辑那一条回复，不再受创建时快照的限制。 */
 function replyCollaboratorIds(r) {
   if (!r) return [];
-  if (Array.isArray(r.collaboratorIds) && r.collaboratorIds.length) {
-    return [...new Set(r.collaboratorIds.filter(Boolean))];
-  }
-  const directLink = r.linkId ? linkById(r.linkId) : null;
-  const poolLink = directLink || linksOf(r.messageId).find((l) => l.poolId === r.poolId && recipientsOf(l).includes(r.authorId));
-  const ids = [];
-  let link = poolLink;
-  /* 子级池的回复沿用整条分发链路，父级收件人也可共同编辑。 */
-  while (link) {
-    ids.push(...recipientsOf(link));
-    link = link.parentLinkId ? linkById(link.parentLinkId) : null;
-  }
-  return [...new Set((ids.length ? ids : [r.authorId]).filter(Boolean))];
+  const ids = [r.authorId];
+  linksOf(r.messageId).forEach((l) => {
+    ids.push(...recipientsOf(l));
+    let parent = l.parentLinkId ? linkById(l.parentLinkId) : null;
+    while (parent) {
+      ids.push(...recipientsOf(parent));
+      parent = parent.parentLinkId ? linkById(parent.parentLinkId) : null;
+    }
+  });
+  return [...new Set(ids.filter(Boolean))];
 }
 
 function replyCollaboratorNames(r) {
@@ -591,14 +589,13 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canSeeMessage(me, m)) return { ok: false, msg: '无权评论该消息' };
   if (repliesOf(msgId).length > 0) {
-    return { ok: false, msg: '已有人回复，无法再新增回复，请直接编辑回复' };
+    return { ok: false, msg: '这条消息已有联合回复，请在该回复上点「编辑」补充' };
   }
   const link = myLinkInPool(msgId, me.id, poolId);
   const parent = parentReplyId ? S.replies.find((x) => x.id === parentReplyId) : null;
   const r = {
     id: 'rp_' + Math.random().toString(36).slice(2, 9),
     messageId: msgId, poolId, linkId: link ? link.id : null, authorId: me.id,
-    collaboratorIds: link ? recipientsOf(link).slice() : [me.id],
     parentReplyId: parent ? parent.id : null,
     content, attachments: attachments || [], at: Date.now(),
     likeCount: 0, likedByUserIds: []
@@ -630,7 +627,6 @@ function editReply(msgId, replyId, content, attachments) {
   if (Array.isArray(attachments)) r.attachments = attachments.slice();
   r.updatedAt = Date.now();
   r.lastEditorId = me.id;
-  r.collaboratorIds = [...new Set((r.collaboratorIds || []).concat(me.id))];
   m.updatedAt = Date.now();
   addLog(m.id, me.id, 'reply_edit', {
     replyId: r.id,

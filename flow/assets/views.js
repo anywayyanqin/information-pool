@@ -1969,12 +1969,12 @@ window.detailSearchKeydown = (event) => {
   }
 };
 
-/* ---------- 固定底栏：若已有人回复，则剩下人仅能编辑回复，无法再更新/新增回复；若无人回复，则第一个打开的人可以说点什么并提交回复 ---------- */
+/* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它提示去编辑那条（新分发进来的人同样是编辑成员） ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
   const hasReply = repliesOf(m.id).length > 0;
-  const comment = !hasReply && !isEnded(m) ? '<div class="bar-comment">' +
-    '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
+  const comment = !isEnded(m) ? '<div class="bar-comment">' +
+    '<input class="bar-comment-input" readonly placeholder="' + (hasReply ? '已有联合回复，点击可去编辑' : '说点什么...') + '" onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
@@ -1995,7 +1995,7 @@ function actionBarHtml(me, m) {
   if (canDispatch(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>分发</span></button>');
   }
-  const actions = acts.length ? '<div class="bar-actions"' + (hasReply ? ' style="margin-left:auto"' : '') + '>' + acts.join('') + '</div>' : '';
+  const actions = acts.length ? '<div class="bar-actions"' + (comment ? '' : ' style="margin-left:auto"') + '>' + acts.join('') + '</div>' : '';
   if (!comment && !actions) return '';
   return '<div class="action-bar-spacer"></div>' +
     '<div class="action-bar"><div class="action-bar-inner">' +
@@ -2151,7 +2151,7 @@ window.openCommentPanel = (msgId) => {
     return;
   }
   if (repliesOf(m.id).length > 0) {
-    toast('已有人回复，请直接点击编辑修改回复');
+    toast('这条消息已有联合回复，请在该回复上点「编辑」补充');
     return;
   }
   cmtPanel = { msgId, content: '', atts: [], recording: false, showAt: false, atKw: '', showImg: false };
@@ -2263,7 +2263,7 @@ window.submitCommentPanel = () => {
   const me = curUser();
   const m = findMsg(st.msgId);
   if (repliesOf(st.msgId).length > 0) {
-    toast('已有人回复，无法再新增回复，请直接编辑回复');
+    toast('这条消息已有联合回复，请在该回复上点「编辑」补充');
     closeCommentPanel();
     return;
   }
