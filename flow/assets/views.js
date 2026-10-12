@@ -306,10 +306,11 @@ function renderListOnly() {
   if (el) el.innerHTML = wbListHtml();
 }
 
-/* 名单过长时折叠：按部门分发会有上百人，卡片与去向只展示前 3 人 */
-function peopleBrief(ids) {
+/* 名单过长时折叠：按部门分发会有上百人，卡片与去向只展示前 3 人（调用方可放宽阈值） */
+function peopleBrief(ids, limit) {
+  const max = limit || 3;
   const names = (ids || []).map(userName);
-  return names.length > 3 ? names.slice(0, 3).join('、') + ' 等 ' + names.length + ' 人' : names.join('、');
+  return names.length > max ? names.slice(0, max).join('、') + ' 等 ' + names.length + ' 人' : names.join('、');
 }
 
 /* 在办链路的处理人名单（节点＝负责人+秘书，个人＝指定落实人） */
@@ -2316,12 +2317,11 @@ window.submitCommentReply = (msgId, parentId) => {
   render();
 };
 
-/* 分发与抄送分别展示，避免把知悉人揉进主办链路。 */
+/* 分发与抄送分别展示，避免把知悉人揉进主办链路。去向只列人名，不写池名（池名重复且没人看） */
 function dispatchTargetsText(m) {
-  return linksOf(m.id).map((l) => {
-    const who = peopleBrief(recipientsOf(l));
-    return poolName(l.poolId) + (who ? '（' + who + '）' : '');
-  }).join('、');
+  const links = linksOf(m.id);
+  const who = peopleBrief([...new Set(links.flatMap((l) => recipientsOf(l)))], 8);
+  return who || links.map((l) => poolName(l.poolId)).join('、');
 }
 
 function dispatchCcText(m) {
@@ -2337,12 +2337,10 @@ function logDispatchLinks(m, l) {
 function dispatchTimelineText(m, l) {
   const related = logDispatchLinks(m, l);
   if (!related.length) return '';
-  const primary = related.map((link) => {
-    const who = peopleBrief(recipientsOf(link));
-    return poolName(link.poolId) + (who ? '（' + who + '）' : '');
-  }).join('、');
+  const who = peopleBrief([...new Set(related.flatMap((link) => recipientsOf(link)))], 8);
+  const primary = who || related.map((link) => poolName(link.poolId)).join('、');
   const ccIds = [...new Set(related.flatMap((link) => ccOf(link)))];
-  const cc = peopleBrief(ccIds);
+  const cc = peopleBrief(ccIds, 8);
   const actionLabel = l.action === 'forwarded' ? '流转至：' : '分发至：';
   return '<div class="tl-action-lines">' +
     '<div><b>' + esc(userName(l.actorId)) + '</b> ' + actionLabel + esc(primary) + '</div>' +
