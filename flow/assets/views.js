@@ -1378,17 +1378,6 @@ window.confirmModal = () => {
   render();
 };
 
-/* 处理人评论后可直接流转到下级节点（是否办结由李倩影判断并汇总回复） */
-window.submitForward = () => {
-  if (!modalState) return;
-  const st = modalState;
-  const r = addReply(st.msgId, st.poolId, st.content, st.atts || []);
-  if (!r.ok) { toast(r.msg); return; }
-  render();
-  modalState = { mode: 'forward', msgId: st.msgId, fromLinkId: st.linkId, selected: [], kw: '', collapsed: [] };
-  renderModal();
-};
-
 /* 选择树节点渲染：只渲染池行，具体人员通过行内「指定落实人」按钮在组织架构弹窗中勾选。
  * 返回 {html, hit, keep}：hit = 子树内是否有显式选中（下级选中时上级呈半选态）；
  * keep = 搜索时该节点是否可见。 */
@@ -1715,18 +1704,6 @@ function renderModal() {
     return;
   }
 
-  /* 评论提交：处理人不再自行标记办结，只有「评论并流转」一个动作 */
-  if (modalState.mode === 'submitChoice') {
-    const link = linkById(modalState.linkId);
-    const canFwd = canForward(curUser(), m, link);
-    document.getElementById('modal').innerHTML =
-      '<div class="choice-list">' +
-        '<div class="choice-row' + (canFwd ? '' : ' dis') + '"' + (canFwd ? ' onclick="submitForward()"' : '') + '><span class="choice-radio"></span><span class="choice-text">评论并流转</span></div>' +
-      '</div>' +
-      (canFwd ? '' : '<div class="form-hint" style="margin-top:8px">当前信息暂无可执行的流转操作</div>');
-    return;
-  }
-
   /* 分发统一走部门员工组织架构（真实部门/人员），不再按池树勾选 */
   if (modalState.mode === 'dispatch') {
     renderOrgDispatchModal(m);
@@ -2009,6 +1986,10 @@ function actionBarHtml(me, m) {
   if (canDispatch(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>分发</span></button>');
   }
+  const fwdLink = myForwardableLink(me, m);
+  if (fwdLink) {
+    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\',\'' + fwdLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
+  }
   const actions = acts.length ? '<div class="bar-actions"' + (comment ? '' : ' style="margin-left:auto"') + '>' + acts.join('') + '</div>' : '';
   if (!comment && !actions) return '';
   return '<div class="action-bar-spacer"></div>' +
@@ -2282,7 +2263,7 @@ window.cmtPickAt = (id) => {
   renderCommentPanel(); restoreCmtFocus();
 };
 
-/* 提交：处理人有可流转的下级时弹「评论并流转」；否则直接生成评论 */
+/* 提交：评论只生成评论，流转改走底栏独立的「流转」按钮 */
 window.submitCommentPanel = () => {
   if (!cmtPanel) return;
   const st = cmtPanel;
@@ -2293,13 +2274,6 @@ window.submitCommentPanel = () => {
   if (repliesOf(st.msgId).length > 0) {
     toast('这条消息已有联合回复，请在该回复上点「编辑」补充');
     closeCommentPanel();
-    return;
-  }
-  const link = !isEnded(m) ? myActiveUnsubmittedLink(me, m) : null;
-  if (link && canForward(me, m, link)) {
-    closeCommentPanel();
-    modalState = { mode: 'submitChoice', msgId: st.msgId, poolId: link.poolId, linkId: link.id, content: content || '[附件]', atts: st.atts };
-    showModal();
     return;
   }
   const r = addReply(st.msgId, pickCommentPool(m, me), content || '[附件]', st.atts, null);

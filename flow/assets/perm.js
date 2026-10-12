@@ -300,9 +300,16 @@ function canGiveFeedback(u, m) {
   return isRequesterView(u, m) && m.status === 'closed';
 }
 
-/* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */
+/* 我作为处理人、链接在办且尚未提交的链接（决定工作台待办与状态徽标） */
 function myActiveUnsubmittedLink(u, m) {
   return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && !hasHandledInPool(u, m, l.poolId)) || null;
+}
+
+/* 底栏「流转」按钮挂的链路：本人是在办链路的处理人（回过评论也算，评论不再自动带出流转），
+ * 且该链路所属池还有下级节点可流转 */
+function myForwardableLink(u, m) {
+  if (!u || !m) return null;
+  return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && canForward(u, m, l)) || null;
 }
 
 /* 分发权限：
