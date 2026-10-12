@@ -723,7 +723,7 @@ function resolveMessage(msgId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
-  if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人本人可以标记已解决' };
+  if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或池/部门负责人可以标记已解决' };
   const now = Date.now();
   linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
     link.status = 'resolved';
@@ -744,7 +744,7 @@ function reopenMessage(msgId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
-  if (!canReopenMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人可以把已解决的消息标为未解决' };
+  if (!canReopenMessage(me, m)) return { ok: false, msg: '只有李倩影或池/部门负责人可以把已解决的消息标为未解决' };
   if (m.status !== 'closed') return { ok: false, msg: '消息尚未标记已解决' };
   const now = Date.now();
   linksOf(msgId).filter((link) => link.isFinal).forEach((link) => {

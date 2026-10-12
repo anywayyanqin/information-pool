@@ -270,29 +270,34 @@ function canForward(u, m, link) {
   return !!pool && childPools(pool.id).length > 0;
 }
 
-/* 底栏「标记为」按钮可见者：高管、李倩影可标记全部消息；普通员工只能标记自己发起的消息。 */
+/* 底栏「标记为」按钮可见者：只有李倩影与各池/部门负责人；
+ * 发起人不参与标记，消息关闭后只做满意/不满意回访 */
 function canMarkMessage(u, m) {
   if (!u || !m || m.status === 'cancelled') return false;
-  if (isDispatcher(u) || isExecutive(u)) return true;
-  return u.id === m.createdBy;
+  return isDispatcher(u) || isExecutive(u);
 }
 
-/* 标记已解决：李倩影与发起人本人，不要求先有处理人回复 */
+/* 标记已解决：李倩影与池/部门负责人，不要求先有处理人回复 */
 function canResolveMessage(u, m) {
   if (!u || !m || m.status === 'closed' || m.status === 'cancelled') return false;
-  return isDispatcher(u) || isExecutive(u) || u.id === m.createdBy;
+  return isDispatcher(u) || isExecutive(u);
 }
 
-/* 标记未解决（把已解决退回处理中）：李倩影与发起人本人 */
+/* 标记未解决（把已解决退回处理中）：李倩影与池/部门负责人 */
 function canReopenMessage(u, m) {
   if (!u || !m || m.status !== 'closed') return false;
-  return isDispatcher(u) || isExecutive(u) || u.id === m.createdBy;
+  return isDispatcher(u) || isExecutive(u);
 }
 
-/* 已解决后发起人的满意度回访（满意/不满意）：只写日志，不改流程。
- * 李倩影例外——关闭与退回的开关在她手上，她的底栏保留「未解决」 */
+/* 发起人视角：底栏不给「标记为/已解决/未解决」，发起人只负责提需求。
+ * 李倩影例外——关闭与退回的开关必须留在她手上 */
+function isRequesterView(u, m) {
+  return !!u && !!m && u.id === m.createdBy && !isDispatcher(u);
+}
+
+/* 已解决后发起人的满意度回访（满意/不满意）：只写日志，不改流程 */
 function canGiveFeedback(u, m) {
-  return !!u && !!m && m.status === 'closed' && u.id === m.createdBy && !isDispatcher(u);
+  return isRequesterView(u, m) && m.status === 'closed';
 }
 
 /* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */

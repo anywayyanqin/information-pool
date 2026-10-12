@@ -1985,16 +1985,17 @@ function actionBarHtml(me, m) {
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
+  const requester = isRequesterView(me, m);
   const feedback = canGiveFeedback(me, m);
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
   const flowIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h10"></path><path d="M12 4l3 3-3 3"></path><path d="M19 17H9"></path><path d="M12 14l-3 3 3 3"></path></svg>';
-  if (!feedback && canMarkMessage(me, m) && m.status !== 'cancelled') {
+  if (!requester && canMarkMessage(me, m) && m.status !== 'cancelled') {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openTagModal(\'' + m.id + '\')">' + tagIcon + '<span>标记为</span></button>');
   }
-  if (canResolveMessage(me, m)) {
+  if (!requester && canResolveMessage(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn state-action resolved-action" onclick="markMessageResolved(\'' + m.id + '\')" title="标记为已解决">👍 <span>已解决</span></button>');
   }
-  if (!feedback && canReopenMessage(me, m)) {
+  if (!requester && canReopenMessage(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn state-action unresolved-action" onclick="markMessageUnresolved(\'' + m.id + '\')" title="标记为未解决">👎 <span>未解决</span></button>');
   }
   if (feedback) {
