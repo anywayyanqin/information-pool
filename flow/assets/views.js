@@ -943,8 +943,7 @@ window.submitNew = () => {
   newDraft = { content: '', customerName: '', sourceOther: '' };
   newCustomerQuery = '';
   newVoiceRecording = false;
-  const tp = poolById(m.sourcePoolId);
-  toast('已投递到' + tp.name + '池，直投 ' + peopleBrief(nodeRecipients(tp)) + '，李倩影同步跟进');
+  toast('已投递');
   location.hash = '#/message/' + m.id;
 };
 
