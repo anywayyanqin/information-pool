@@ -2145,6 +2145,11 @@ function mentionCandidates(m) {
   return [...new Set(ids)];
 }
 
+/* 发起人补充的说明按顺序另起一行接在详细描述后面（.content-box 是 pre-wrap） */
+function fullContentText(m) {
+  return (m.content || '') + (m.supplements || []).map((s) => '\n' + s.content).join('');
+}
+
 window.openCommentPanel = (msgId) => {
   const m = findMsg(msgId);
   if (!m) return;
@@ -2153,7 +2158,7 @@ window.openCommentPanel = (msgId) => {
     return;
   }
   const joint = repliesOf(m.id)[0];
-  if (joint) {
+  if (joint && !isRequesterView(curUser(), m)) {
     /* 一条消息一条联合回复：已有回复时这个入口直接进编辑弹窗，能不能编辑由 openEditReplyModal 判定 */
     openEditReplyModal(msgId, joint.id);
     return;
@@ -2210,7 +2215,7 @@ function renderCommentPanel() {
   }
   document.getElementById('cmtPanel').innerHTML =
     '<div class="cmt-panel-head">' +
-      '<span class="cmt-panel-title">评论 ' + esc(m.no) + '</span>' +
+      '<span class="cmt-panel-title">' + (isRequesterView(curUser(), m) ? '补充说明 ' : '评论 ') + esc(m.no) + '</span>' +
       '<span class="cmt-panel-x" onclick="closeCommentPanel()">×</span>' +
     '</div>' +
     '<textarea id="cmtText" placeholder="说点什么..." oninput="cmtPanel.content=this.value">' + esc(cmtPanel.content) + '</textarea>' +
@@ -2258,14 +2263,22 @@ window.cmtPickAt = (id) => {
   renderCommentPanel(); restoreCmtFocus();
 };
 
-/* 提交：评论只生成评论，流转改走底栏独立的「流转」按钮 */
+/* 提交：发起人这个输入框是「补充说明」，走 appendSupplement；其他人仍是联合回复 */
 window.submitCommentPanel = () => {
   if (!cmtPanel) return;
   const st = cmtPanel;
   const content = (st.content || '').trim();
-  if (!content && !st.atts.length) { toast('请输入评论内容'); return; }
   const me = curUser();
   const m = findMsg(st.msgId);
+  if (isRequesterView(me, m)) {
+    const r = appendSupplement(st.msgId, content, st.atts);
+    if (!r.ok) { toast(r.msg); return; }
+    closeCommentPanel();
+    toast('已补充');
+    render();
+    return;
+  }
+  if (!content && !st.atts.length) { toast('请输入评论内容'); return; }
   if (repliesOf(st.msgId).length > 0) {
     toast('这条消息已有联合回复，请在该回复上点「编辑」补充');
     closeCommentPanel();
@@ -2375,7 +2388,7 @@ function renderDetail(id) {
       ? '<div class="detail-info-line"><span class="detail-info-label">分发至：</span><span>' + esc(targets) + '</span></div>'
       : '<div class="detail-info-line"><span class="detail-info-label">分发状态：</span><span>待李倩影分发</span></div>') +
     (ccTargets ? '<div class="detail-info-line"><span class="detail-info-label">抄送：</span><span>' + esc(ccTargets) + '</span></div>' : '') +
-    '<div class="content-box">' + esc(m.content) + '</div>' +
+    '<div class="content-box">' + esc(fullContentText(m)) + '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
       ? '<div class="cust-line"><button class="btn btn-ghost btn-sm" onclick="openCustomer(\'' + esc(m.customerName) + '\')">客户信息</button>' +

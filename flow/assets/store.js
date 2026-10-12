@@ -793,6 +793,30 @@ function recordSatisfaction(msgId, verdict) {
   return { ok: true, msg: '已记录反馈：' + verdict };
 }
 
+/* ---------- 动作：发起人补充说明 ----------
+ * 发起人在详情页底栏输入的不是评论而是对自己消息的补充：
+ * 文字另起一行接在详细描述后面，附件并进消息附件，不改状态 */
+function appendSupplement(msgId, text, atts) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (m.createdBy !== me.id) return { ok: false, msg: '仅发起人可补充说明' };
+  if (m.status === 'cancelled') return { ok: false, msg: '消息已取消，无法补充' };
+  const content = (text || '').trim();
+  const files = atts || [];
+  if (!content && !files.length) return { ok: false, msg: '请填写补充内容' };
+  const now = Date.now();
+  if (content) {
+    if (!Array.isArray(m.supplements)) m.supplements = [];
+    m.supplements.push({ by: me.id, at: now, content });
+  }
+  if (files.length) m.attachments = (m.attachments || []).concat(files);
+  m.updatedAt = now;
+  addLog(m.id, me.id, 'supplement', { note: me.name + '补充了说明' });
+  saveState();
+  return { ok: true, msg: '已补充' };
+}
+
 /* ---------- 动作：取消消息（提出人） ---------- */
 function cancelMessage(msgId) {
   const me = curUser();
