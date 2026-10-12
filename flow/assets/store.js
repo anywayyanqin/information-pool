@@ -793,6 +793,25 @@ function recordSatisfaction(msgId, verdict) {
   return { ok: true, msg: '已记录反馈：' + verdict };
 }
 
+/* ---------- 动作：发起人补充信息 ----------
+ * 补充内容不进标题、不改状态，只是按顺序追加到正文下方另起一行显示 */
+function appendSupplement(msgId, text) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (m.createdBy !== me.id) return { ok: false, msg: '仅发起人可补充信息' };
+  if (m.status === 'cancelled') return { ok: false, msg: '消息已取消，无法补充' };
+  const content = (text || '').trim();
+  if (!content) return { ok: false, msg: '请填写补充内容' };
+  const now = Date.now();
+  if (!Array.isArray(m.supplements)) m.supplements = [];
+  m.supplements.push({ by: me.id, at: now, content });
+  m.updatedAt = now;
+  addLog(m.id, me.id, 'supplement', { note: me.name + '补充了信息' });
+  saveState();
+  return { ok: true, msg: '已补充' };
+}
+
 /* ---------- 动作：取消消息（提出人） ---------- */
 function cancelMessage(msgId) {
   const me = curUser();

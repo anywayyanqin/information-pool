@@ -239,7 +239,7 @@ function canEditReply(u, m, r) {
  * 只有 'auto' 这类系统自动状态变更不展示。 */
 function visibleLogs(u, m) {
   const allowed = ['created', 'directed', 'dispatched', 'forwarded', 'reply', 'reply_edit',
-    'closed', 'reopened', 'resolve_mark', 'tagged', 'urge', 'shared', 'cancelled', 'transfer'];
+    'closed', 'reopened', 'resolve_mark', 'tagged', 'urge', 'shared', 'cancelled', 'transfer', 'supplement'];
   const seen = new Set();
   return logsOf(m.id).filter((l) => {
     if (!allowed.includes(l.action)) return false;
@@ -298,6 +298,11 @@ function isRequesterView(u, m) {
 /* 已解决后发起人的满意度回访（满意/不满意）：只写日志，不改流程 */
 function canGiveFeedback(u, m) {
   return isRequesterView(u, m) && m.status === 'closed';
+}
+
+/* 发起人补充信息：提交后还能追加说明，只有发起人本人，已取消的消息除外 */
+function canSupplement(u, m) {
+  return !!u && !!m && u.id === m.createdBy && m.status !== 'cancelled';
 }
 
 /* 我作为处理人、链接在办且尚未提交的链接（决定工作台待办与状态徽标） */

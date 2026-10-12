@@ -1051,6 +1051,25 @@ window.markMessageUnresolved = (msgId) => {
   render();
 };
 
+/* 发起人补充信息：正文按提交顺序另起一行追加（.content-box 是 pre-wrap） */
+function fullContentText(m) {
+  return (m.content || '') + (m.supplements || []).map((s) => '\n' + s.content).join('');
+}
+
+window.openSupplementModal = (msgId) => {
+  modalState = { mode: 'supplement', msgId };
+  showModal();
+};
+window.submitSupplement = () => {
+  if (!modalState || modalState.mode !== 'supplement') return;
+  const el = document.getElementById('supplementText');
+  const r = appendSupplement(modalState.msgId, el ? el.value : '');
+  if (!r.ok) { toast(r.msg); return; }
+  closeModal();
+  toast('已补充');
+  render();
+};
+
 /* 发起人满意度回访：只落日志，不重绘成别的状态 */
 window.markSatisfied = (msgId, verdict) => {
   const result = recordSatisfaction(msgId, verdict);
@@ -1680,6 +1699,18 @@ function renderModal() {
     return;
   }
 
+  /* 补充信息：发起人提交后追加说明，显示在详细描述下方 */
+  if (modalState.mode === 'supplement') {
+    document.getElementById('modal').innerHTML =
+      '<h3>补充信息</h3>' +
+      '<div class="form-row"><textarea id="supplementText" style="width:100%;min-height:120px;padding:10px;font-size:14px;border:1px solid #e3e8f2;border-radius:8px;outline:none;font-family:inherit;line-height:1.6" placeholder="补充说明，将另起一行显示在详细描述下方"></textarea></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
+        '<button class="btn" onclick="submitSupplement()">提交补充</button>' +
+      '</div>';
+    return;
+  }
+
   /* 编辑回复：同一分发链路的被指派人联合编辑 */
   if (modalState.mode === 'editReply') {
     const r = S.replies.find((x) => x.id === modalState.replyId);
@@ -1973,6 +2004,10 @@ function actionBarHtml(me, m) {
   }
   if (!requester && canReopenMessage(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn state-action unresolved-action" onclick="markMessageUnresolved(\'' + m.id + '\')" title="标记为未解决">👎 <span>未解决</span></button>');
+  }
+  const noteIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4l10-10-4-4L4 16z"></path><path d="M14 6l4 4"></path></svg>';
+  if (canSupplement(me, m)) {
+    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openSupplementModal(\'' + m.id + '\')">' + noteIcon + '<span>补充</span></button>');
   }
   if (feedback) {
     acts.push('<button class="btn btn-sm bar-action-btn state-action resolved-action" onclick="markSatisfied(\'' + m.id + '\',\'满意\')" title="仅作记录，不影响流转">👍 <span>满意</span></button>');
@@ -2375,7 +2410,7 @@ function renderDetail(id) {
       ? '<div class="detail-info-line"><span class="detail-info-label">分发至：</span><span>' + esc(targets) + '</span></div>'
       : '<div class="detail-info-line"><span class="detail-info-label">分发状态：</span><span>待李倩影分发</span></div>') +
     (ccTargets ? '<div class="detail-info-line"><span class="detail-info-label">抄送：</span><span>' + esc(ccTargets) + '</span></div>' : '') +
-    '<div class="content-box">' + esc(m.content) + '</div>' +
+    '<div class="content-box">' + esc(fullContentText(m)) + '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
       ? '<div class="cust-line"><button class="btn btn-ghost btn-sm" onclick="openCustomer(\'' + esc(m.customerName) + '\')">客户信息</button>' +
