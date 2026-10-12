@@ -1972,9 +1972,8 @@ window.detailSearchKeydown = (event) => {
 /* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它直接进那条回复的编辑弹窗 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
-  const hasReply = repliesOf(m.id).length > 0;
   const comment = !isEnded(m) ? '<div class="bar-comment">' +
-    '<input class="bar-comment-input" readonly placeholder="' + (hasReply ? '已有联合回复，点击可直接编辑' : '说点什么...') + '" onclick="openCommentPanel(\'' + m.id + '\')">' +
+    '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
