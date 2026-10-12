@@ -1986,10 +1986,6 @@ function actionBarHtml(me, m) {
   if (canDispatch(me, m)) {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openDispatchModal(\'' + m.id + '\')">' + flowIcon + '<span>分发</span></button>');
   }
-  const fwdLink = myForwardableLink(me, m);
-  if (fwdLink) {
-    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openForwardModal(\'' + m.id + '\',\'' + fwdLink.id + '\')">' + flowIcon + '<span>流转</span></button>');
-  }
   const actions = acts.length ? '<div class="bar-actions"' + (comment ? '' : ' style="margin-left:auto"') + '>' + acts.join('') + '</div>' : '';
   if (!comment && !actions) return '';
   return '<div class="action-bar-spacer"></div>' +

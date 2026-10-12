@@ -305,13 +305,6 @@ function myActiveUnsubmittedLink(u, m) {
   return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && !hasHandledInPool(u, m, l.poolId)) || null;
 }
 
-/* 底栏「流转」按钮挂的链路：本人是在办链路的处理人（回过评论也算，评论不再自动带出流转），
- * 且该链路所属池还有下级节点可流转 */
-function myForwardableLink(u, m) {
-  if (!u || !m) return null;
-  return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && canForward(u, m, l)) || null;
-}
-
 /* 分发权限：
  * 总池分发人/管理员对任何未终结的消息均可分发；
  * 在办处理人同样可以分发。两者的目标均参照部门员工组织架构，可选全公司任意部门或个人。 */
