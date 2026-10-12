@@ -2003,6 +2003,14 @@ function actionBarHtml(me, m) {
     '</div></div>';
 }
 
+/* 日志正文若自带操作人姓名开头（标记类日志与历史数据都是这种写法），
+ * 时间线前面已经单列了操作人，这里去掉避免「李倩影 李倩影标记…」重复 */
+function logBody(l) {
+  const note = l.note || l.action;
+  const who = l.actorId ? userName(l.actorId) : '';
+  return who && note.indexOf(who) === 0 ? note.slice(who.length).trim() : note;
+}
+
 function logText(l) {
   switch (l.action) {
     case 'created':
@@ -2014,8 +2022,12 @@ function logText(l) {
       return '发布了回复' + (l.note ? '：' + l.note : '');
     case 'reply_edit':
       return '编辑了回复' + (l.note ? '：' + l.note : '');
+    case 'closed':
+      return '标记信息为已解决';
+    case 'reopened':
+      return '标记信息为未解决，重新进入处理';
     default:
-      return l.note || l.action;
+      return logBody(l);
   }
 }
 

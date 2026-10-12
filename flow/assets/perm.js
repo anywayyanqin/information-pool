@@ -234,9 +234,12 @@ function canEditReply(u, m, r) {
   return collaborators.includes(u.id) || r.authorId === u.id;
 }
 
-/* 当前用户在全局时间线中可见的流转日志：只展示谁投递、谁分发、谁发布回复、谁编辑回复 */
+/* 全局时间线：凡是人的操作都要留痕——谁投递、谁分发/流转、谁回复/编辑回复，
+ * 以及底栏「标记为」的业务标签、已解决、未解决、催办，还有分享、取消、转派；
+ * 只有 'auto' 这类系统自动状态变更不展示。 */
 function visibleLogs(u, m) {
-  const allowed = ['created', 'directed', 'dispatched', 'reply', 'reply_edit'];
+  const allowed = ['created', 'directed', 'dispatched', 'forwarded', 'reply', 'reply_edit',
+    'closed', 'reopened', 'resolve_mark', 'tagged', 'urge', 'shared', 'cancelled', 'transfer'];
   const seen = new Set();
   return logsOf(m.id).filter((l) => {
     if (!allowed.includes(l.action)) return false;
