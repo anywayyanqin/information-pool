@@ -23,7 +23,7 @@ const USERS = [
   { id: 'u_zjj', name: '张晶晶',   wecom: 'zhangjj',  dept: '零售条线',       role: 'poolAdmin',  title: '零售池负责人' },
   { id: 'u_wyx', name: '闻勇翔',   wecom: 'wenyx',    dept: '产业条线',       role: 'poolAdmin',  title: '产业池负责人' },
   { id: 'u_swm', name: '邵嵬敏',   wecom: 'shaowm',   dept: '产业条线',       role: 'poolAdmin',  title: '产业·财富池负责人' },
-  { id: 'u_wjx', name: '王冀湘',   wecom: 'wangjx',   dept: '机构条线',       role: 'poolAdmin',  title: '机构·买方池负责人' },
+  { id: 'u_wjx', name: '王冀湘',   wecom: 'wangjx',   dept: '机构条线',       role: 'poolAdmin',  title: '机构池负责人' },
   { id: 'u_fdk', name: '房迪恺',   wecom: 'fangdk',   dept: '买方条线',       role: 'poolAdmin',  title: '买方池负责人' },
   { id: 'u_nty', name: '倪韬雍',   wecom: 'nity',     dept: '国际条线',       role: 'poolAdmin',  title: '国际池负责人' },
   /* 条线资深员工（原业务池负责人，现归入条线经办） */
@@ -211,7 +211,7 @@ function seedPools() {
       timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
 
     { id: 'p_buy', name: '买方', type: 'biz', level: 0, parentId: null,
-      ownerIds: ['u_wjx', 'u_fdk'], secretaryIds: [], memberIds: ['u_wjx', 'u_fdk', 'u_qx', 'u_s7', 'u_ty'],
+      ownerIds: ['u_fdk'], secretaryIds: [], memberIds: ['u_wjx', 'u_fdk', 'u_qx', 'u_s7', 'u_ty'],
       timeoutDays: 2, allowDirect: false, autoAssign: false, status: 'ACTIVE' },
     { id: 'p_buy_quant', name: '量化私募部', type: 'dept', level: 1, parentId: 'p_buy',
       ownerIds: ['u_s7'], secretaryIds: [], memberIds: ['u_s7', 'u_ty'],
@@ -424,7 +424,7 @@ function buildSeed() {
     { id: 'lg20', messageId: 'm6', at: T(50), actorId: 'u_wd',  action: 'reply',           poolId: 'p_inst_1', note: '已安排客户经理对接路演时间。' },
 
     { id: 'lg21', messageId: 'm7', at: T(70), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到买方池' },
-    { id: 'lg22', messageId: 'm7', at: T(69), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 量化私募部（负责人 孙七），抄送 买方池（王冀湘、房迪恺）' },
+    { id: 'lg22', messageId: 'm7', at: T(69), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 量化私募部（负责人 孙七），抄送 买方池（房迪恺）' },
     { id: 'lg23', messageId: 'm7', at: T(63), actorId: 'u_s7',  action: 'reply',           poolId: 'p_buy_quant', note: '账单差异为交割月调整，已与客户财务确认无误。' },
 
     { id: 'lg27', messageId: 'm8', at: T(20), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到财富池' },

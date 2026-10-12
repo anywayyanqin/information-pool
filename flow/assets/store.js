@@ -36,6 +36,18 @@ function loadState() {
       if (!Array.isArray(p.memberIds)) p.memberIds = [...p.ownerIds];
     });
   }
+  /* 一次性修正：买方池负责人去掉王冀湘，只投给房迪恺。
+   * 用户浏览器里已存的演示数据不会因种子变化而更新，所以落一次迁移；
+   * 打标记保证只跑一遍，之后在池管理页自行增减负责人不再被覆盖。 */
+  if (S && Array.isArray(S.pools) && !S.buyerOwnerFixedAt) {
+    const buy = S.pools.find((p) => p.id === 'p_buy');
+    if (buy && Array.isArray(buy.ownerIds) && buy.ownerIds.includes('u_wjx')) {
+      buy.ownerIds = buy.ownerIds.filter((id) => id !== 'u_wjx');
+      if (!buy.ownerIds.length) buy.ownerIds = ['u_fdk'];
+      saveState();
+    }
+    S.buyerOwnerFixedAt = Date.now();
+  }
   if (S && Array.isArray(S.messages)) {
     S.messages.forEach((m) => {
       if (!Array.isArray(m.tags)) m.tags = [];
