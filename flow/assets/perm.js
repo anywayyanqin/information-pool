@@ -10,14 +10,13 @@
 
 const IDENTITY_KEY = 'flow_identity';
 
-/* 可切换身份（总池分发人 / 业务池负责人 / 部门负责人 / 组负责人 / 普通员工） */
+/* 可切换身份：使用通讯录中的真实员工姓名，权限仍沿用对应演示账号。 */
 const IDENTITY_CHOICES = [
-  { id: 'u_qy',  label: '总池分发人（李倩影）' },
-  { id: 'u_wjx', label: '业务池负责人（机构·王冀湘）' },
-  { id: 'u_wyx', label: '业务池负责人（产业·闻勇翔）' },
-  { id: 'u_zm',  label: '部门负责人（产业服务部·周明）' },
-  { id: 'u_ls',  label: '组负责人（华东零售组·李四）' },
-  { id: 'u_zs',  label: '普通员工（张三）' }
+  { id: 'u_qy',  label: '李倩影' },
+  { id: 'u_wjx', label: '王冀湘' },
+  { id: 'u_wyx', label: '闻勇翔' },
+  { id: 'u_zs',  label: '董丹璐' },
+  { id: 'u_wyq', label: '王燕勤' }
 ];
 const DEFAULT_IDENTITY = 'u_qy';
 
@@ -30,6 +29,9 @@ function setIdentity(userId) { localStorage.setItem(IDENTITY_KEY, userId); }
 
 function isAdmin(u) { return u && u.role === 'admin'; }
 function isDispatcher(u) { return u && (u.role === 'dispatcher' || u.id === 'u_qy'); }
+function isExecutive(u) {
+  return !!u && (isAdmin(u) || u.role === 'poolAdmin' || u.role === 'deptAdmin');
+}
 
 /* 当前身份在池体系中的管理根节点（8 个业务池 → 部门 → 小组）：
  * 总池分发人 / 管理员 -> null，管辖整片森林（见 pmRoots）
@@ -174,6 +176,7 @@ function linkVisibleTo(u, l) {
  * 发起人看本人提交的；收件人/抄送人看分发给自己的；被分享人可查看。 */
 function canSeeMessage(u, m) {
   if (isAdmin(u) || isDispatcher(u)) return true;
+  if (m.status === 'closed') return true;
   if (m.createdBy === u.id) return true;
   if ((m.sharedUserIds || []).includes(u.id)) return true;
   return linksOf(m.id).some((l) => linkVisibleTo(u, l));
@@ -208,7 +211,9 @@ function isHandlerOf(u, m) {
  * 倩影的汇总回复不在此列，对所有可见者开放（详情页时间线的汇总节点）。 */
 function canSeeReply(u, m, r) {
   if (isAdmin(u) || isDispatcher(u)) return true;
+  if (m.status === 'closed') return true;
   if (isHandlerOf(u, m)) return true;
+  if (linksOf(m.id).some((l) => l.id === r.linkId && ccOf(l).includes(u.id))) return true;
   return r.authorId === u.id;
 }
 
@@ -217,21 +222,32 @@ function visibleReplies(u, m) {
   return repliesOf(m.id).filter((r) => canSeeReply(u, m, r));
 }
 
-/* 能否编辑回复：被指派人和李倩影共编同一条回复 */
+/* 能否编辑回复：同一分发链路的收件人共享编辑；总池分发人可协助编辑，截止后统一锁定 */
 function canEditReply(u, m, r) {
   if (!u || !m || !r) return false;
+  if (m.status === 'closed' || m.status === 'cancelled') return false;
+  if (typeof replyEditClosed === 'function' && replyEditClosed(r)) return false;
   if (isAdmin(u) || isDispatcher(u) || u.id === 'u_qy') return true;
-  if (isHandlerOf(u, m)) return true;
-  if (r.authorId === u.id) return true;
-  const linkRecipients = linksOf(m.id).flatMap((l) => recipientsOf(l));
-  if (linkRecipients.includes(u.id)) return true;
-  return false;
+  const collaborators = typeof replyCollaboratorIds === 'function'
+    ? replyCollaboratorIds(r)
+    : [r.authorId];
+  return collaborators.includes(u.id) || r.authorId === u.id;
 }
 
 /* 当前用户在全局时间线中可见的流转日志：只展示谁投递、谁分发、谁发布回复、谁编辑回复 */
 function visibleLogs(u, m) {
   const allowed = ['created', 'directed', 'dispatched', 'reply', 'reply_edit'];
-  return logsOf(m.id).filter((l) => allowed.includes(l.action));
+  const seen = new Set();
+  return logsOf(m.id).filter((l) => {
+    if (!allowed.includes(l.action)) return false;
+    const actionKey = (l.action === 'created' || l.action === 'directed') ? 'initial' : l.action;
+    const key = actionKey === 'initial'
+      ? [actionKey, l.actorId, l.at].join('|')
+      : [actionKey, l.actorId, l.at, l.note || '', JSON.stringify(l.meta || {})].join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /* 能否回复：未终结的消息，本人是该池在办链路的收件人（或被分享/发起人普通留言） */
@@ -251,24 +267,23 @@ function canForward(u, m, link) {
   return !!pool && childPools(pool.id).length > 0;
 }
 
-/* 底栏「标记为」按钮可见者：李倩影（状态+业务标签）随时可点；
- * 发起人只在流程已解决后可操作（提交人确认标签），打标不改流程状态 */
+/* 底栏「标记为」按钮可见者：高管、李倩影可标记全部消息；普通员工只能标记自己发起的消息。 */
 function canMarkMessage(u, m) {
   if (!u || !m || m.status === 'cancelled') return false;
-  if (isDispatcher(u) || isAdmin(u)) return true;
-  return u.id === m.createdBy && m.status === 'closed';
+  if (isDispatcher(u) || isExecutive(u)) return true;
+  return u.id === m.createdBy;
 }
 
 /* 标记已解决：李倩影与发起人本人，不要求先有处理人回复 */
 function canResolveMessage(u, m) {
   if (!u || !m || m.status === 'closed' || m.status === 'cancelled') return false;
-  return isDispatcher(u) || isAdmin(u) || u.id === m.createdBy;
+  return isDispatcher(u) || isExecutive(u) || u.id === m.createdBy;
 }
 
 /* 标记未解决（把已解决退回处理中）：李倩影与发起人本人 */
 function canReopenMessage(u, m) {
   if (!u || !m || m.status !== 'closed') return false;
-  return isDispatcher(u) || isAdmin(u) || u.id === m.createdBy;
+  return isDispatcher(u) || isExecutive(u) || u.id === m.createdBy;
 }
 
 /* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */

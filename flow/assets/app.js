@@ -13,7 +13,7 @@ window.goBackFromDetail = () => {
 function renderTopbar() {
   const me = curUser();
   document.getElementById('topbar').innerHTML =
-    '<a class="brand" href="#/home">有求必应</a>' +
+    '<a class="brand" href="#/workbench">有求必应</a>' +
     '<div class="topbar-spacer"></div>' +
     (canAccessPoolManage(me) ? '<a href="#/pools" class="pool-manage-link" aria-label="进入池管理">' +
       '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.2 3h-.4a1.8 1.8 0 0 0-1.8 1.8v.1a1.8 1.8 0 0 1-.9 1.6l-.4.2a1.8 1.8 0 0 1-1.8 0l-.1-.1a1.8 1.8 0 0 0-2.5.7l-.2.3a1.8 1.8 0 0 0 .7 2.5l.1.1a1.8 1.8 0 0 1 .9 1.6v.4a1.8 1.8 0 0 1-.9 1.6l-.1.1a1.8 1.8 0 0 0-.7 2.5l.2.3a1.8 1.8 0 0 0 2.5.7l.1-.1a1.8 1.8 0 0 1 1.8 0l.4.2a1.8 1.8 0 0 1 .9 1.6v.1a1.8 1.8 0 0 0 1.8 1.8h.4a1.8 1.8 0 0 0 1.8-1.8v-.1a1.8 1.8 0 0 1 .9-1.6l.4-.2a1.8 1.8 0 0 1 1.8 0l.1.1a1.8 1.8 0 0 0 2.5-.7l.2-.3a1.8 1.8 0 0 0-.7-2.5l-.1-.1a1.8 1.8 0 0 1-.9-1.6v-.4a1.8 1.8 0 0 1 .9-1.6l.1-.1a1.8 1.8 0 0 0 .7-2.5l-.2-.3a1.8 1.8 0 0 0-2.5-.7l-.1.1a1.8 1.8 0 0 1-1.8 0l-.4-.2a1.8 1.8 0 0 1-.9-1.6v-.1A1.8 1.8 0 0 0 12.2 3z"/><circle cx="12" cy="12" r="3"/></svg>池管理</a>' : '') +
@@ -74,19 +74,24 @@ window.resetAll = () => {
   if (!confirm('将清空本地全部演示数据并恢复种子数据，确定重置吗？')) return;
   resetState();
   toast('Mock 数据已重置');
-  location.hash = '#/home';
+  location.hash = '#/workbench';
   render();
 };
 
 function render() {
-  const hash = location.hash || '#/home';
+  const hash = location.hash || '#/workbench';
   if (hash.indexOf('#/infopool') === 0) {
-    location.replace('#/home');
+    location.replace('#/workbench');
+    return;
+  }
+  if (hash === '#/home') {
+    location.replace('#/workbench');
     return;
   }
   const isMessageDetail = hash.indexOf('#/message/') === 0;
   if (!isMessageDetail) detailReturnHash = hash;
   document.body.classList.toggle('detail-route', isMessageDetail);
+  document.body.classList.toggle('workbench-route', hash === '#/workbench');
   renderTopbar();
   syncTopbarHeight();
   const bottomNav = document.getElementById('bottomNav');
@@ -104,7 +109,7 @@ function render() {
   else if (hash === '#/notifications') html = renderNotifications();
   else if (hash === '#/mine') html = renderMyInteractions();
   else if (hash === '#/workbench') html = renderWorkbench();
-  else html = renderInfoPool();
+  else html = renderWorkbench();
   app.innerHTML = html;
   if (hash === '#/new') afterRenderNew();
   if (hash.indexOf('#/pools') === 0 && window.afterRenderPools) afterRenderPools();
@@ -114,5 +119,5 @@ window.addEventListener('hashchange', render);
 window.addEventListener('resize', syncTopbarHeight);
 
 loadState();
-if (!location.hash) location.hash = '#/home';
+if (!location.hash) location.hash = '#/workbench';
 render();

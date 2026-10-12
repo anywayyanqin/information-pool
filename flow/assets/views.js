@@ -14,6 +14,12 @@ function fmtTime(ts) {
   const p = (n) => String(n).padStart(2, '0');
   return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
 }
+function fmtMonthTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return (d.getMonth() + 1) + '月' + d.getDate() + '日 ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 function fmtSize(n) {
   if (!n && n !== 0) return '';
   if (n < 1024) return n + ' B';
@@ -132,7 +138,7 @@ function treeHtml(nodes, opts) {
 /* ==========================================================================
  * 1. 工作台（总池分发人的分发能力直接融合在本页）
  * ========================================================================== */
-let wbTab = null;   /* null = 默认视图：总池分发人默认「待办」（直投后由她与池负责人共同跟进），其余默认「全部」 */
+let wbTab = null;   /* null = 默认进入「广场」 */
 let wbPool = 'all';
 let wbStatus = '';
 let wbTag = '';
@@ -140,35 +146,62 @@ let wbKw = '';
 let wbSortKey = 'updatedAt';   /* 表格列头排序，默认按最近更新倒序 */
 let wbSortDir = -1;
 
-/* 工作台筛选栏固定 6 个标签；「待分发」只有李倩影视角可见（其余角色该态并入已办） */
+/* 工作台筛选栏：逾期对李倩影、经办人和高管均可见。 */
 function wbTabs() {
-  const tabs = [{ key: 'all', name: '全部' }, { key: 'mine', name: '我发起的' }];
-  if (isDispatcher(curUser()) || isAdmin(curUser())) tabs.push({ key: 'dispatch', name: '待分发' });
-  return tabs.concat([{ key: 'todo', name: '待办' }, { key: 'done', name: '已办' }, { key: 'ended', name: '已解决' }]);
+  const canViewAll = isDispatcher(curUser()) || isExecutive(curUser());
+  if (canViewAll) {
+    return [
+      { key: 'todo', name: '待办' },
+      { key: 'overdue', name: '逾期' },
+      { key: 'unresolved', name: '未解决' },
+      { key: 'mine', name: '我发起的' },
+      { key: 'all', name: '全部' },
+      { key: 'ended', name: '已解决' },
+      { key: 'done', name: '已办' }
+    ];
+  }
+  const tabs = [{ key: 'square', name: '广场' }, { key: 'mine', name: '我发起的' }];
+  return tabs.concat([{ key: 'todo', name: '待办' }, { key: 'done', name: '已办' }, { key: 'overdue', name: '逾期' }, { key: 'ended', name: '已解决' }]);
+}
+function isWbTodo(m, me) {
+  const status = flowStatus(m, me);
+  return status === 'todo' || (isDispatcher(me) && status === 'dispatch');
 }
 function effectiveWbTab() {
   const keys = wbTabs().map((t) => t.key);
   if (wbTab && keys.includes(wbTab)) return wbTab;
-  return isDispatcher(curUser()) ? 'todo' : 'all';
+  const me = curUser();
+  if (isDispatcher(me) || isExecutive(me)) return 'todo';
+  const hasTodo = visibleMessages().some((m) => isWbTodo(m, me));
+  return hasTodo ? 'todo' : 'square';
 }
 
 function wbTabCount(key) {
   const me = curUser();
-  let list = visibleMessages();
+  let list = key === 'square' ? S.messages.slice() : visibleMessages();
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
   if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
+  if (key === 'square') return list.filter((m) => m.status === 'closed').length;
   if (key === 'mine') return list.filter((m) => m.createdBy === me.id).length;
   if (key === 'all') return list.length;
+  if (key === 'overdue') return list.filter((m) => isMessageOverdue(m)).length;
+  if (key === 'unresolved') return list.filter((m) => m.resolveMark === '未解决').length;
+  if (key === 'todo') return list.filter((m) => isWbTodo(m, me)).length;
   return list.filter((m) => flowStatus(m, me) === key).length;
 }
 
-/* 表格列头排序：编号/提议类型/发起人/时间/详细描述可排；状态/标签/当前处理人只是徽标展示，不参与排序 */
+/* 表格各字段均支持排序；筛选值统一由 wbColumnText 提供。 */
 const WB_SORTERS = {
-  no: (m) => m.no,
-  src: (m) => proposalTypeText(m),
-  creator: (m) => userName(m.createdBy),
-  updatedAt: (m) => m.updatedAt,
-  desc: (m) => m.content
+  no: (m) => wbColumnText(m, 'no'),
+  status: (m) => wbColumnText(m, 'status'),
+  src: (m) => wbColumnText(m, 'src'),
+  tags: (m) => wbColumnText(m, 'tags'),
+  handler: (m) => wbColumnText(m, 'handler'),
+  creator: (m) => wbColumnText(m, 'creator'),
+  updatedAt: (m) => Number(wbColumnText(m, 'updatedAt')),
+  deadline: (m) => Number(wbColumnText(m, 'deadline')),
+  desc: (m) => wbColumnText(m, 'desc'),
+  latestReply: (m) => wbColumnText(m, 'latestReply')
 };
 window.setWbSort = (k) => {
   if (wbSortKey === k) { wbSortDir = -wbSortDir; }
@@ -179,9 +212,13 @@ window.setWbSort = (k) => {
 function wbList() {
   const me = curUser();
   const tab = effectiveWbTab();
-  let list = visibleMessages();
+  let list = tab === 'square' ? S.messages.slice() : visibleMessages();
   /* 六个标签按主流程状态分区；「我发起的」按来源过滤，可与其他状态并存 */
-  if (tab === 'mine') list = list.filter((m) => m.createdBy === me.id);
+  if (tab === 'square') list = list.filter((m) => m.status === 'closed');
+  else if (tab === 'mine') list = list.filter((m) => m.createdBy === me.id);
+  else if (tab === 'todo') list = list.filter((m) => isWbTodo(m, me));
+  else if (tab === 'unresolved') list = list.filter((m) => m.resolveMark === '未解决');
+  else if (tab === 'overdue') list = list.filter((m) => isMessageOverdue(m));
   else if (tab !== 'all') list = list.filter((m) => flowStatus(m, me) === tab);
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
   if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
@@ -286,8 +323,10 @@ function messageListCardHtml(m, me) {
   const actLinks = linksOf(m.id).filter(linkActive);
   const handler = activeHandlerNames(m) || '—';
   const src = proposalTypeText(m);
+  const latestReply = latestReplyOf(m);
+  const latestReplyText = latestReply && latestReply.content ? latestReply.content : '暂无回复';
 
-  return '<div class="msg-row" onclick="openMessage(\'' + m.id + '\')">' +
+  return '<div class="msg-row" title="长按查看全部回复" onclick="openMessage(\'' + m.id + '\')" oncontextmenu="openMessage(\'' + m.id + '\'); return false;">' +
     '<div class="msg-row-top">' +
       '<span class="msg-no">' + esc(m.no) + '</span>' +
       cardStatusBadgeHtml(m) +
@@ -296,6 +335,7 @@ function messageListCardHtml(m, me) {
     messageTagLineHtml(m) +
     '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src || '—') + '</div>' +
     '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
+    '<div class="msg-latest-reply"><span class="msg-info-label">最新回复：</span>' + esc(latestReplyText) + '</div>' +
     '<div class="msg-foot">' +
       '<span class="msg-meta">发起人：' + esc(userName(m.createdBy)) + '</span>' +
       '<span class="msg-time">' + fmtTime(m.updatedAt) + '</span>' +
@@ -304,36 +344,76 @@ function messageListCardHtml(m, me) {
 }
 
 /* 工作台 PC 动态表格列：与卡片信息等价（不加标题列），详细描述截断一行、悬浮看全文 */
+function latestReplyOf(m) {
+  return repliesOf(m.id).reduce((latest, reply) => {
+    if (!latest) return reply;
+    const latestAt = latest.updatedAt || latest.at || 0;
+    const replyAt = reply.updatedAt || reply.at || 0;
+    return replyAt > latestAt ? reply : latest;
+  }, null);
+}
+
+function wbColumnText(m, key, me) {
+  const latest = latestReplyOf(m);
+  if (key === 'no') return m.no || '';
+  if (key === 'status') return m.status === 'closed' ? '已解决' : (m.status === 'cancelled' ? '已取消' : '办理中');
+  if (key === 'src') return proposalTypeText(m) || '';
+  if (key === 'tags') return (m.tags || []).join('、');
+  if (key === 'handler') return isEnded(m) ? '' : (activeHandlerNames(m) || '');
+  if (key === 'creator') return userName(m.createdBy);
+  if (key === 'updatedAt') return String(m.updatedAt || 0);
+  if (key === 'deadline') return String(messageReplyDeadline(m) || 0);
+  if (key === 'latestReply') return latest ? latest.content : '';
+  if (key === 'desc') return m.content || '';
+  return '';
+}
+
 const WB_COLS = [
   { key: 'no', label: '编号', sort: 'no' },
-  { key: 'status', label: '状态' },
+  { key: 'status', label: '状态', sort: 'status' },
   { key: 'src', label: '提议类型', sort: 'src' },
-  { key: 'tags', label: '标签' },
-  { key: 'handler', label: '当前处理人' },
+  { key: 'tags', label: '标签', sort: 'tags' },
+  { key: 'handler', label: '当前处理人', sort: 'handler' },
   { key: 'creator', label: '发起人', sort: 'creator' },
   { key: 'updatedAt', label: '时间', sort: 'updatedAt' },
-  { key: 'desc', label: '详细描述', sort: 'desc' }
+  { key: 'deadline', label: '截止时间', sort: 'deadline' },
+  { key: 'desc', label: '详细描述', sort: 'desc' },
+  { key: 'latestReply', label: '最新回复', sort: 'latestReply' }
 ];
 function wbTableHtml(list, me) {
   const head = WB_COLS.map((c) => {
-    if (!c.sort) return '<th>' + c.label + '</th>';
     const on = wbSortKey === c.sort;
     const arrow = on ? (wbSortDir > 0 ? ' ▲' : ' ▼') : '';
     return '<th class="sortable' + (on ? ' on' : '') + '" onclick="setWbSort(\'' + c.sort + '\')">' +
-      c.label + arrow + '</th>';
+      '<div class="wb-head-label">' + c.label + arrow + '</div>' +
+      '</th>';
   }).join('');
   const rows = list.map((m) => {
     const handler = activeHandlerNames(m) || '—';
     const src = proposalTypeText(m);
+    const latestReply = latestReplyOf(m);
+    const latestReplyText = latestReply
+      ? latestReply.content
+      : '—';
+    const overdue = isMessageOverdue(m);
+    const overdueMeta = overdue
+      ? '<span class="wb-overdue">逾期 ' + messageOverdueDays(m) + ' 天</span>'
+      : '';
+    const deadline = messageReplyDeadline(m);
+    const deadlineMeta = deadline
+      ? '<span class="wb-deadline' + (overdue ? ' overdue' : '') + '">' + fmtTime(deadline) + '</span>'
+      : '';
     return '<tr onclick="openMessage(\'' + m.id + '\')">' +
-      '<td class="t-no">' + esc(m.no) + '</td>' +
+      '<td class="t-no">' + esc(m.no) + overdueMeta + '</td>' +
       '<td>' + cardStatusBadgeHtml(m) + '</td>' +
       '<td>' + esc(src || '—') + '</td>' +
       '<td class="t-tags">' + (messageTagsHtml(m) || '—') + '</td>' +
       '<td>' + esc(isEnded(m) ? '—' : handler) + '</td>' +
       '<td>' + esc(userName(m.createdBy)) + '</td>' +
       '<td class="t-time">' + fmtTime(m.updatedAt) + '</td>' +
+      '<td class="t-deadline">' + deadlineMeta + '</td>' +
       '<td class="t-desc" title="' + esc(m.content) + '">' + esc(m.content) + '</td>' +
+      '<td class="t-reply" title="' + esc(latestReplyText) + '">' + esc(latestReplyText) + '</td>' +
     '</tr>';
   }).join('');
   return '<table class="wb-table"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
@@ -351,16 +431,21 @@ function wbListHtml() {
 function renderWorkbench() {
   const me = curUser();
   const tab = effectiveWbTab();
-  const statusList = (isDispatcher(me) || isAdmin(me) ? [['dispatch', '待分发']] : [])
-    .concat([['todo', '待办'], ['done', '已办'], ['ended', '已解决']]);
-  const statusOpts = statusList.map((item) =>
-    '<option value="' + item[0] + '"' + (wbStatus === item[0] ? ' selected' : '') + '>' + item[1] + '</option>').join('');
   /* 池筛选与池管理页的「目标池」口径一致：只列一级业务池，选中即连带其下部门/小组 */
-  const poolOpts = '<option value="all">全部池</option>' + bizPools().map((p) =>
+  const canViewAllPools = isDispatcher(me) || isExecutive(me);
+  if (!canViewAllPools) wbPool = 'all';
+  const visiblePoolIds = new Set(visibleMessages().flatMap((m) =>
+    bizPools().filter((p) => msgInPool(m, p.id)).map((p) => p.id)));
+  const availablePools = bizPools().filter((p) => canViewAllPools || visiblePoolIds.has(p.id));
+  const poolScopeLabel = canViewAllPools ? '全部池' : '我的可见池';
+  const poolOpts = '<option value="all">' + poolScopeLabel + '</option>' + availablePools.map((p) =>
     '<option value="' + p.id + '"' + (wbPool === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
+  const poolFilterHtml = canViewAllPools ? '<select onchange="setWbPool(this.value)">' + poolOpts + '</select>' : '';
   const tagNames = [...new Set(MESSAGE_TAGS.concat(S.messages.flatMap((m) => m.tags || [])))];
   const tagOpts = '<option value="">全部标签</option>' + tagNames.map((tag) =>
     '<option value="' + esc(tag) + '"' + (wbTag === tag ? ' selected' : '') + '>' + esc(tag) + '</option>').join('');
+  /* 广场与其他工作台栏目共用表格/移动卡片，只将数据限定为已解决消息。 */
+  const listHtml = wbListHtml();
   return '<div class="wb-main">' +
     '<div class="wb-tabs-row">' +
     '<div class="tabs">' + wbTabs().map((t) =>
@@ -371,11 +456,10 @@ function renderWorkbench() {
     '</div>' +
     '<div class="filters">' +
       '<input placeholder="搜索编号 / 关键字" value="' + esc(wbKw) + '" oninput="setWbKw(this.value)">' +
-      '<select onchange="setWbPool(this.value)">' + poolOpts + '</select>' +
-      '<select onchange="setWbStatus(this.value)"><option value="">全部状态</option>' + statusOpts + '</select>' +
+      poolFilterHtml +
       '<select onchange="setWbTag(this.value)">' + tagOpts + '</select>' +
     '</div>' +
-    '<div id="msgList">' + wbListHtml() + '</div>' +
+    '<div id="msgList">' + listHtml + '</div>' +
   '</div>';
 }
 
@@ -681,9 +765,9 @@ function ipListHtml() {
   }).join('');
 }
 
-function renderInfoPool() {
+function renderInfoPool(sourceList) {
   const me = curUser();
-  const list = visibleMessages().sort((a, b) => b.updatedAt - a.updatedAt);
+  const list = (sourceList || visibleMessages()).slice().sort((a, b) => b.updatedAt - a.updatedAt);
   const cards = list.map((m) => {
     const author = userById(m.createdBy) || {};
     const replies = repliesOf(m.id);
@@ -709,7 +793,7 @@ function renderInfoPool() {
   }).join('');
 
   return '<div class="square-page">' +
-    '<header class="square-head"><div><h1>信息广场</h1><p>' + esc(me.name) + '可见的信息，按最近互动排序</p></div>' +
+    '<header class="square-head"><div><h1>广场</h1><p>' + esc(me.name) + '可见的已解决提议，按最近互动排序</p></div>' +
       '<span>' + list.length + ' 条内容</span></header>' +
     '<div class="square-feed">' + (cards || empty('暂无可见信息')) + '</div>' +
   '</div>';
@@ -719,8 +803,9 @@ function renderInfoPool() {
  * 2. 我要填报（投递）
  * ========================================================================== */
 let newMsgAtts = [];
-let newSources = [];
-let newTargetPool = null;
+let editReplyAtts = [];
+let newSources = ['其他'];
+let newTargetPool = 'p_other';
 let newDraft = { content: '', customerName: '', sourceOther: '' };
 let newCustomerQuery = '';
 let newVoiceRecording = false;
@@ -841,8 +926,6 @@ window.submitNew = () => {
   captureNewDraft();
   const content = newDraft.content.trim();
   if (!newSources.length) { toast('请选择提议类型'); return; }
-  if (newSources.includes('客需') && !newDraft.customerName) { toast('选择客需时必须填写客户名称'); return; }
-  if (newSources.includes('其他') && !newDraft.sourceOther.trim()) { toast('选择其他时必须填写类型说明'); return; }
   if (!content) { toast('请填写问题描述'); return; }
   if (!newTargetPool) { toast('请选择 1 个投递目标池'); return; }
   const m = createMessage({
@@ -854,8 +937,8 @@ window.submitNew = () => {
   });
   if (!m || m.ok === false) { toast(m.msg || '提交失败'); return; }
   newMsgAtts = [];
-  newSources = [];
-  newTargetPool = null;
+  newSources = ['其他'];
+  newTargetPool = 'p_other';
   newDraft = { content: '', customerName: '', sourceOther: '' };
   newCustomerQuery = '';
   newVoiceRecording = false;
@@ -866,12 +949,11 @@ window.submitNew = () => {
 
 function renderNew() {
   const needCustomer = newSources.includes('客需');
-  const needOther = newSources.includes('其他');
   return '<div class="card" style="max-width:720px;margin:0 auto 14px">' +
     '<div class="form-row"><div class="form-label">提议类型<span class="req">*</span></div>' +
       '<div class="chip-group" id="newSourceChips"></div></div>' +
     (needCustomer ?
-      '<div class="form-row"><div class="form-label">客户名称<span class="req">*</span></div>' +
+      '<div class="form-row"><div class="form-label">客户名称（可选）</div>' +
         '<div class="customer-picker" id="newCustomerPicker">' +
           '<input type="text" id="newCustomerSearch" autocomplete="off" placeholder="搜索并选择客户" value="' + esc(newDraft.customerName || newCustomerQuery) + '" ' +
             'onfocus="openNewCustomerPicker()" onblur="closeNewCustomerPicker()" oninput="filterNewCustomers(this.value)">' +
@@ -879,9 +961,6 @@ function renderNew() {
           '<span class="customer-picker-arrow">⌄</span>' +
           '<div class="customer-picker-options" id="newCustomerOptions">' + newCustomerOptionsHtml(newCustomerQuery) + '</div>' +
         '</div></div>' : '') +
-    (needOther ?
-      '<div class="form-row"><div class="form-label">类型说明<span class="req">*</span></div>' +
-        '<input type="text" id="newSourceOther" placeholder="请填写具体提议类型" value="' + esc(newDraft.sourceOther) + '"></div>' : '') +
     '<div class="form-row"><div class="form-label">目标池<span class="req">*</span></div>' +
       '<div class="chip-group" id="newPoolChips"></div></div>' +
     '<div class="form-row"><div class="form-label">详细描述<span class="req">*</span></div>' +
@@ -920,7 +999,7 @@ let modalState = null;
 /* 二级弹窗：按组织架构选落实人的状态 */
 let orgPicker = null;
 
-const MESSAGE_TAGS = ['重点督办', '高优先级', '需协同'];
+const MESSAGE_TAGS = ['重点督办', '长线任务'];
 function messageTagsHtml(m) {
   return (m.tags || []).map((tag) => '<span class="message-tag">' + esc(tag) + '</span>').join('');
 }
@@ -936,32 +1015,39 @@ window.openTagModal = (msgId) => {
   modalState = { mode: 'tag', msgId };
   showModal();
 };
+window.openUrgeModal = (msgId) => {
+  modalState = { mode: 'urgeMessage', msgId };
+  showModal();
+};
+window.confirmUrgeModal = () => {
+  if (!modalState || modalState.mode !== 'urgeMessage') return;
+  const result = urgeMessage(modalState.msgId);
+  if (!result.ok) { toast(result.msg); return; }
+  closeModal();
+  toast('催办通知已发送');
+  render();
+};
 
 window.applyMessageTag = (msgId, tag) => {
   const m = findMsg(msgId);
   if (!m) return;
-  if (tag === '已解决' || tag === '未解决') {
-    const me = curUser();
-    closeModal();
-    /* 发起人：只记录在时间线上，不改状态、不重新拉起处理 */
-    if (!isDispatcher(me) && !isAdmin(me)) {
-      const r = recordResolveMark(msgId, tag);
-      toast(r.ok ? r.msg + '（不影响流转）' : r.msg);
-      if (r.ok) render();
-      return;
-    }
-    /* 李倩影：仍然驱动状态机，两项都始终可点，已是当前状态时只提示 */
-    if ((m.status === 'closed') === (tag === '已解决')) { toast('当前已是' + tag); return; }
-    const result = tag === '已解决' ? resolveMessage(msgId) : reopenMessage(msgId);
-    if (!result.ok) { toast(result.msg); return; }
-    toast('已标记为' + tag);
-    render();
-    return;
-  }
   const r = toggleMessageTag(msgId, tag);
   if (!r.ok) { toast(r.msg); return; }
   closeModal();
   toast(r.active ? '已添加“' + tag + '”标签' : '已取消“' + tag + '”标签');
+  render();
+};
+
+window.markMessageResolved = (msgId) => {
+  const result = resolveMessage(msgId);
+  if (!result.ok) { toast(result.msg); return; }
+  toast('已标记为已解决');
+  render();
+};
+window.markMessageUnresolved = (msgId) => {
+  const result = reopenMessage(msgId);
+  if (!result.ok) { toast(result.msg); return; }
+  toast('已标记为未解决');
   render();
 };
 
@@ -970,7 +1056,7 @@ window.openDispatchModal = (id) => {
   modalState = {
     mode: 'dispatch', msgId: id, selected: [], kw: '', collapsed: [],
     anchorPoolId: m ? dispatchAnchorPoolId(curUser(), m) : null,
-    orgExpanded: []
+    orgExpanded: [], orgRole: 'primary'
   };
   showModal();
 };
@@ -1212,6 +1298,18 @@ window.removeSelTarget = (key) => {
  * orgd:/orgp: 前缀来自处理人的组织架构分发，统一挂在本人正在处理的池下（anchorPoolId）。 */
 function resolveSelTargets() {
   const out = [];
+  if (modalState.mode === 'dispatch') {
+    const primary = orgPickedUserIds('primary');
+    const cc = orgPickedUserIds('cc').filter((id) => primary.indexOf(id) === -1);
+    if (primary.length) out.push({
+      poolId: modalState.anchorPoolId,
+      mode: 'people',
+      recipientIds: primary,
+      ccIds: cc,
+      key: 'org-dispatch'
+    });
+    return out;
+  }
   const done = {};
   (modalState.selected || []).forEach((k) => {
     if (k.indexOf('orgd:') === 0) {
@@ -1369,20 +1467,28 @@ function countSelectablePools(n, ctx) {
 
 /* ==========================================================================
  * 处理人分发：按部门员工组织架构（org.js，69 部门 / 1294 人）选择目标
- * 勾选部门＝该部门全员收到待办；勾选个人＝本人收到待办。均抄送信息所属业务池负责人。
+ * 主办人收到待办并可回复；抄送人仅可查看。主办人使用 orgd:/orgp:，抄送人使用 orgccd:/orgccp:。
  * ========================================================================== */
 const ORG_RENDER_LIMIT = 80;
 
-function orgSelKeys() {
-  return (modalState.selected || []).filter((k) => k.indexOf('orgd:') === 0 || k.indexOf('orgp:') === 0);
+function orgSelKeys(role) {
+  const prefixes = role === 'cc' ? ['orgccd:', 'orgccp:'] : ['orgd:', 'orgp:'];
+  return (modalState.selected || []).filter((k) => prefixes.some((p) => k.indexOf(p) === 0));
 }
-function orgPickedUserIds() {
+function orgPickedUserIds(role) {
   const ids = [];
-  orgSelKeys().forEach((k) => {
-    if (k.indexOf('orgd:') === 0) orgDeptUserIds(k.slice(5)).forEach((uid) => ids.push(uid));
-    else ids.push(k.slice(5));
+  orgSelKeys(role).forEach((k) => {
+    const isDept = role === 'cc' ? k.indexOf('orgccd:') === 0 : k.indexOf('orgd:') === 0;
+    const offset = role === 'cc' ? 7 : 5;
+    if (isDept) orgDeptUserIds(k.slice(offset)).forEach((uid) => ids.push(uid));
+    else ids.push(k.slice(offset));
   });
   return [...new Set(ids)];
+}
+function orgKey(role, type, id) { return (role === 'cc' ? 'orgcc' : 'org') + type + ':' + id; }
+function orgKeyInfo(key) {
+  const cc = key.indexOf('orgcc') === 0;
+  return { role: cc ? 'cc' : 'primary', type: key.indexOf(cc ? 'orgccd:' : 'orgd:') === 0 ? 'd' : 'p', id: key.slice(cc ? 7 : 5) };
 }
 
 window.toggleOrgDeptExpand = (did) => {
@@ -1393,36 +1499,46 @@ window.toggleOrgDeptExpand = (did) => {
   renderModal();
   restoreKwFocus();
 };
-window.toggleOrgDeptSel = (did) => {
+window.switchOrgRole = (role) => {
   if (!modalState) return;
-  const key = 'orgd:' + did;
+  modalState.orgRole = role === 'cc' ? 'cc' : 'primary';
+  renderModal();
+  restoreKwFocus();
+};
+window.toggleOrgDeptSel = (did, role) => {
+  if (!modalState) return;
+  role = role === 'cc' ? 'cc' : 'primary';
+  const key = orgKey(role, 'd', did);
   const i = modalState.selected.indexOf(key);
   if (i > -1) { modalState.selected.splice(i, 1); }
   else {
     /* 整部门与部门内的单人选择互斥，避免重复计数 */
     const ids = orgDeptUserIds(did);
-    modalState.selected = modalState.selected
-      .filter((k) => k.indexOf('orgp:') !== 0 || ids.indexOf(k.slice(5)) === -1);
+    modalState.selected = modalState.selected.filter((k) => {
+      const info = orgKeyInfo(k);
+      return info.role !== role || info.type !== 'p' || ids.indexOf(info.id) === -1;
+    });
     modalState.selected.push(key);
   }
   renderModal();
   restoreKwFocus();
 };
-window.toggleOrgPersonSel = (uid) => {
+window.toggleOrgPersonSel = (uid, role) => {
   if (!modalState) return;
+  role = role === 'cc' ? 'cc' : 'primary';
   const did = orgDeptIdOfUser(uid);
-  if (did && (modalState.selected || []).indexOf('orgd:' + did) > -1) return;
-  const key = 'orgp:' + uid;
+  if (did && (modalState.selected || []).indexOf(orgKey(role, 'd', did)) > -1) return;
+  const key = orgKey(role, 'p', uid);
   const i = modalState.selected.indexOf(key);
   if (i > -1) modalState.selected.splice(i, 1); else modalState.selected.push(key);
   renderModal();
   restoreKwFocus();
 };
 
-function orgPersonRowHtml(u, deptOn) {
-  const on = deptOn || (modalState.selected || []).indexOf('orgp:' + u.id) > -1;
+function orgPersonRowHtml(u, deptOn, role) {
+  const on = deptOn || (modalState.selected || []).indexOf(orgKey(role, 'p', u.id)) > -1;
   const clickable = !deptOn;
-  const handler = clickable ? 'toggleOrgPersonSel(\'' + u.id + '\')' : '';
+  const handler = clickable ? 'toggleOrgPersonSel(\'' + u.id + '\',\'' + role + '\')' : '';
   return '<div class="mt-row mt-person-row' + (on ? ' sel' : '') + (clickable ? '' : ' dis') + '">' +
     '<span class="mt-caret"></span>' +
     '<span class="mt-check' + (on ? ' on' : (clickable ? '' : ' dis')) + '"' +
@@ -1433,7 +1549,8 @@ function orgPersonRowHtml(u, deptOn) {
   '</div>';
 }
 
-function orgSelListHtml(kw) {
+function orgSelListHtml(kw, role) {
+  role = role === 'cc' ? 'cc' : 'primary';
   const k = (kw || '').trim().toLowerCase();
   const sel = modalState.selected || [];
   const expanded = modalState.orgExpanded || [];
@@ -1443,8 +1560,8 @@ function orgSelListHtml(kw) {
     const members = d.userIds.map((uid) => userById(uid)).filter(Boolean);
     const hits = k ? members.filter((u) => (u.name || '').toLowerCase().includes(k)) : [];
     if (k && !deptNameHit && !hits.length) return;
-    const deptOn = sel.indexOf('orgd:' + d.id) > -1;
-    const personOnCount = members.filter((u) => sel.indexOf('orgp:' + u.id) > -1).length;
+    const deptOn = sel.indexOf(orgKey(role, 'd', d.id)) > -1;
+    const personOnCount = members.filter((u) => sel.indexOf(orgKey(role, 'p', u.id)) > -1).length;
     const open = k ? hits.length > 0 || deptNameHit : expanded.indexOf(d.id) > -1;
     const pool = k ? hits : members;
     const list = pool.slice(0, ORG_RENDER_LIMIT);
@@ -1454,7 +1571,7 @@ function orgSelListHtml(kw) {
       '<div class="mt-row org-dept-row' + rowCls + '">' +
         '<span class="mt-caret" onclick="event.stopPropagation();toggleOrgDeptExpand(\'' + d.id + '\')">' + (open ? '▾' : '▸') + '</span>' +
         '<span class="mt-check' + (deptOn ? ' on' : (personOnCount ? ' half' : '')) + '"' +
-          ' onclick="toggleOrgDeptSel(\'' + d.id + '\')">' + (deptOn ? '✓' : '') + '</span>' +
+          ' onclick="toggleOrgDeptSel(\'' + d.id + '\',\'' + role + '\')">' + (deptOn ? '✓' : '') + '</span>' +
         '<span class="mt-name" onclick="toggleOrgDeptExpand(\'' + d.id + '\')">' +
           '<span class="mt-name-main">' + esc(d.name) + '</span>' +
           '<span class="mt-name-sub">' + members.length + ' 人' +
@@ -1463,7 +1580,7 @@ function orgSelListHtml(kw) {
         (k && hits.length ? '<span class="mt-type">命中 ' + hits.length + ' 人</span>' : '') +
       '</div>' +
       (open ? '<div class="mt-children">' +
-        list.map((u) => orgPersonRowHtml(u, deptOn)).join('') +
+        list.map((u) => orgPersonRowHtml(u, deptOn, role)).join('') +
         (list.length ? '' : '<div class="lock-tip">按部门名匹配，可勾选整部门，或输入姓名定位人员</div>') +
         (truncated ? '<div class="lock-tip">' + (k ? '命中 ' + pool.length + ' 人' : '该部门 ' + members.length + ' 人') +
           '，仅显示前 ' + ORG_RENDER_LIMIT + ' 人，输入姓名可精确定位</div>' : '') +
@@ -1473,18 +1590,19 @@ function orgSelListHtml(kw) {
   return rows.join('');
 }
 
-function orgChipsHtml() {
-  const keys = orgSelKeys();
+function orgChipsHtml(role, label) {
+  const keys = orgSelKeys(role);
   if (!keys.length) return '';
   const chips = keys.map((key) => {
-    if (key.indexOf('orgd:') === 0) {
-      const d = orgDeptById(key.slice(5));
+    const info = orgKeyInfo(key);
+    if (info.type === 'd') {
+      const d = orgDeptById(info.id);
       if (!d) return '';
       return '<span class="mt-chip person">' + esc(d.name) +
         '<i>· ' + d.userIds.length + ' 人</i>' +
         '<b onclick="removeSelTarget(\'' + key + '\')">×</b></span>';
     }
-    const uid = key.slice(5);
+    const uid = info.id;
     const u = userById(uid);
     const dept = orgDeptById(orgDeptIdOfUser(uid));
     return '<span class="mt-chip person">' + esc(u ? u.name : uid) +
@@ -1492,7 +1610,7 @@ function orgChipsHtml() {
       '<b onclick="removeSelTarget(\'' + key + '\')">×</b></span>';
   }).join('');
   return '<div class="mt-chips"><div class="mt-chips-group">' +
-    '<span class="mt-chips-label">目标 · ' + orgPickedUserIds().length + ' 人</span>' + chips +
+    '<span class="mt-chips-label">' + esc(label || (role === 'cc' ? '抄送' : '主办人')) + ' · ' + orgPickedUserIds(role).length + ' 人</span>' + chips +
   '</div></div>';
 }
 
@@ -1500,17 +1618,19 @@ function orgChipsHtml() {
 function renderOrgDispatchModal(m) {
   const kw = (modalState.kw || '').trim();
   const anchor = modalState.anchorPoolId || m.sourcePoolId;
-  const pool = poolById(anchor);
-  const ccNames = bizOwnersOf(anchor).filter((id) => id !== curUser().id).map(userName);
+  const role = modalState.orgRole === 'cc' ? 'cc' : 'primary';
   const listHtml = '<div class="modal-list">' +
-    (orgSelListHtml(kw) || '<div class="lock-tip">没有匹配的部门或人员</div>') + '</div>';
+    (orgSelListHtml(kw, role) || '<div class="lock-tip">没有匹配的部门或人员</div>') + '</div>';
   document.getElementById('modal').innerHTML =
     '<h3>分发到部门或人员</h3>' +
+    '<div class="form-hint" style="margin:0 0 8px">主办人收到待办并可回复；抄送人仅可查看消息和回复。多人主办时共享一条联合回复。</div>' +
+    '<div class="org-role-tabs">' +
+      '<button type="button" class="' + (role === 'primary' ? 'on' : '') + '" onclick="switchOrgRole(\'primary\')">主办人（可回复） · ' + orgPickedUserIds('primary').length + '</button>' +
+      '<button type="button" class="' + (role === 'cc' ? 'on' : '') + '" onclick="switchOrgRole(\'cc\')">抄送人（仅查看） · ' + orgPickedUserIds('cc').length + '</button>' +
+    '</div>' +
     '<div class="form-row" style="margin-bottom:10px"><input type="text" id="modalKw" placeholder="搜索部门 / 姓名" value="' + esc(kw) + '" oninput="modalKwInput(this.value)"></div>' +
-    '<div class="form-hint" style="margin:0 0 8px">按部门员工组织架构分发：勾选部门＝该部门全员收到待办；' +
-      (ccNames.length ? '抄送' + (pool ? poolName(pool.id) + '所属业务池负责人 ' : '业务池负责人 ') + ccNames.join('、') : '') + '</div>' +
     listHtml +
-    orgChipsHtml() +
+    orgChipsHtml('primary', '主办人') + orgChipsHtml('cc', '抄送人') +
     '<div class="modal-actions">' +
       '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
       '<button class="btn" onclick="confirmModal()">确定</button>' +
@@ -1538,14 +1658,23 @@ function renderModal() {
   if (!modalState) return;
   const m = findMsg(modalState.msgId);
 
-  /* 标记为：发起人与李倩影都能标 已解决/未解决；打开时任何选项都不带选中态 */
-  if (modalState.mode === 'tag') {
-    const me = curUser();
-    const isQy = isDispatcher(me) || isAdmin(me);
-    const rows = ['已解决', '未解决'];
-    if (isQy) MESSAGE_TAGS.forEach((tag) => rows.push(tag));
+  if (modalState.mode === 'urgeMessage') {
     document.getElementById('modal').innerHTML =
-      '<div class="tag-modal-head"><b>标记为</b><span>' + (isQy ? '处理状态与业务标签' : '提交人确认（不改变流程状态）') + '</span></div>' +
+      '<h3>催办处理提醒</h3>' +
+      '<div class="form-row"><div class="form-hint">' + esc(m ? m.no + ' ' + m.title : '') +
+        ' 已逾期 ' + (m ? messageOverdueDays(m) : 0) + ' 天，将提醒当前经办人尽快回复。</div></div>' +
+      '<div class="modal-actions">' +
+        '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
+        '<button class="btn" onclick="confirmUrgeModal()">发送催办</button>' +
+      '</div>';
+    return;
+  }
+
+  /* 标记为：只处理业务标签；状态通过操作栏的独立按钮处理。 */
+  if (modalState.mode === 'tag') {
+    const rows = MESSAGE_TAGS;
+    document.getElementById('modal').innerHTML =
+      '<div class="tag-modal-head"><b>标记为</b><span>业务标签</span></div>' +
       '<div class="tag-choice-list">' + rows.map((tag) =>
         '<button type="button" class="tag-choice"' +
           ' onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +
@@ -1554,22 +1683,26 @@ function renderModal() {
     return;
   }
 
-  /* 编辑回复：被指派人和李倩影共编同一条回复 */
+  /* 编辑回复：同一分发链路的被指派人联合编辑 */
   if (modalState.mode === 'editReply') {
     const r = S.replies.find((x) => x.id === modalState.replyId);
-    const linkRecipients = linksOf(m.id).flatMap((l) => recipientsOf(l));
-    const assigneeIds = [...new Set(linkRecipients.concat(r && r.authorId ? [r.authorId] : []))].filter((id) => id && id !== 'u_qy');
-    const assignees = assigneeIds.map(userName).filter(Boolean);
-    const assigneeText = assignees.length ? assignees.join('、') : '—';
+    const collaboratorText = r ? replyCollaboratorNames(r).join('、') : '—';
+    const closeAt = r ? replyEditDeadline(r) : 0;
     document.getElementById('modal').innerHTML =
       '<h3>编辑回复</h3>' +
       '<div class="form-row"><textarea id="editReplyText" style="width:100%;min-height:120px;padding:10px;font-size:14px;border:1px solid #e3e8f2;border-radius:8px;outline:none;font-family:inherit;line-height:1.6" placeholder="请编辑回复内容">' +
         esc(r ? r.content : '') + '</textarea>' +
-        '<div class="form-hint">被指派人（' + esc(assigneeText) + '）与李倩影共编同一条回复，各自的回复互相可见</div></div>' +
+        '<div class="form-hint">可回复人员：' + esc(collaboratorText || '—') +
+          (closeAt ? '；可共同编辑至 ' + fmtTime(closeAt) : '') + '</div></div>' +
+      '<div class="form-row"><div class="form-label">附件</div>' +
+        '<div class="upbtns"><button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById(\'editReplyAttFile\').click()">上传文件</button></div>' +
+        '<input type="file" id="editReplyAttFile" multiple style="display:none" onchange="editReplyAttChange(this)">' +
+        '<div class="att-chips" id="editReplyAttChips"></div></div>' +
       '<div class="modal-actions">' +
         '<button class="btn btn-ghost" onclick="closeModal()">取消</button>' +
         '<button class="btn" onclick="saveEditReply()">确定</button>' +
       '</div>';
+    renderEditReplyAtts();
     return;
   }
 
@@ -1661,19 +1794,36 @@ function renderModal() {
 /* ==========================================================================
  * 4. 消息详情
  * ========================================================================== */
-/* ---------- 编辑回复：被指派人和李倩影共编同一条回复 ---------- */
+/* ---------- 编辑回复：同一分发链路的被指派人联合编辑 ---------- */
 window.openEditReplyModal = (msgId, replyId) => {
+  const m = findMsg(msgId);
   const r = S.replies.find((x) => x.id === replyId);
-  if (!r) return;
+  if (!m || !r) return;
+  if (!canEditReply(curUser(), m, r)) {
+    toast(replyEditClosed(r) ? '联合回复编辑时间已截止，当前内容已锁定' : '当前身份不在该联合回复的编辑成员中');
+    return;
+  }
+  editReplyAtts = (r.attachments || []).map((a) => ({ ...a }));
   modalState = { mode: 'editReply', msgId, replyId };
   showModal();
 };
+window.editReplyAttChange = (input) => {
+  [...(input.files || [])].forEach((f) => editReplyAtts.push({ name: f.name, size: f.size, type: f.type }));
+  input.value = '';
+  renderEditReplyAtts();
+};
+window.delEditReplyAtt = (i) => { editReplyAtts.splice(i, 1); renderEditReplyAtts(); };
+function renderEditReplyAtts() {
+  const el = document.getElementById('editReplyAttChips');
+  if (el) el.innerHTML = editReplyAtts.map((a, i) =>
+    '<span class="att-chip">' + esc(a.name) + '（' + fmtSize(a.size) + '）<b onclick="delEditReplyAtt(' + i + ')">×</b></span>').join('');
+}
 window.saveEditReply = () => {
   if (!modalState || modalState.mode !== 'editReply') return;
   const el = document.getElementById('editReplyText');
   const text = el ? el.value.trim() : '';
   if (!text) { toast('请输入回复内容'); return; }
-  const r = editReply(modalState.msgId, modalState.replyId, text);
+  const r = editReply(modalState.msgId, modalState.replyId, text, editReplyAtts);
   if (!r.ok) { toast(r.msg); return; }
   closeModal();
   toast('回复已更新');
@@ -1823,7 +1973,7 @@ window.detailSearchKeydown = (event) => {
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
   const hasReply = repliesOf(m.id).length > 0;
-  const comment = !hasReply ? '<div class="bar-comment">' +
+  const comment = !hasReply && !isEnded(m) ? '<div class="bar-comment">' +
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
@@ -1832,9 +1982,14 @@ function actionBarHtml(me, m) {
   if (canMarkMessage(me, m) && m.status !== 'cancelled') {
     acts.push('<button class="btn btn-sm bar-action-btn" onclick="openTagModal(\'' + m.id + '\')">' + tagIcon + '<span>标记为</span></button>');
   }
-  if (canShareMessage(me, m)) {
-    const shareIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="18" cy="5" r="3"></circle><circle cx="6" cy="12" r="3"></circle><circle cx="18" cy="19" r="3"></circle><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"></path></svg>';
-    acts.push('<button class="btn btn-sm bar-action-btn" onclick="openSharePicker(\'' + m.id + '\')">' + shareIcon + '<span>分享</span></button>');
+  if (canResolveMessage(me, m)) {
+    acts.push('<button class="btn btn-sm bar-action-btn state-action resolved-action" onclick="markMessageResolved(\'' + m.id + '\')" title="标记为已解决">👍 <span>已解决</span></button>');
+  }
+  if (canReopenMessage(me, m)) {
+    acts.push('<button class="btn btn-sm bar-action-btn state-action unresolved-action" onclick="markMessageUnresolved(\'' + m.id + '\')" title="标记为未解决">👎 <span>未解决</span></button>');
+  }
+  if (isDispatcher(me) && isMessageOverdue(m)) {
+    acts.push('<button class="btn btn-sm bar-action-btn overdue-action" onclick="openUrgeModal(\'' + m.id + '\')">催办</button>');
   }
   /* 分发目标参照部门员工组织架构 */
   if (canDispatch(me, m)) {
@@ -1870,22 +2025,21 @@ function logText(l) {
 let replyBoxFor = null;
 
 function singleReplyRowHtml(me, m, r, orphanParent) {
-  const au = userById(r.authorId) || {};
   const liked = (r.likedByUserIds || []).includes(me.id);
   const canEdit = typeof canEditReply === 'function' ? canEditReply(me, m, r) : false;
-  const lastEditor = r.lastEditorId && r.lastEditorId !== r.authorId ? userById(r.lastEditorId) : null;
-  const editedTag = r.updatedAt && r.updatedAt !== r.at ? '<span class="cmt-confirm-tag" style="background:#eef3ff;color:#2f6bff">已编辑' + (lastEditor ? ' by ' + esc(lastEditor.name) : '') + '</span>' : '';
+  const collaboratorText = replyCollaboratorNames(r).join('、') || userName(r.authorId);
+  const firstReply = repliesOf(m.id)[0];
+  const isFirstReply = !!firstReply && firstReply.id === r.id;
+  const replyDeadline = isFirstReply ? replyDeadlineHint(m) : '';
   return '<div class="cmt-row" id="cmtrow_' + r.id + '">' +
-    '<div class="avatar">' + esc((au.name || '?').slice(0, 1)) + '</div>' +
     '<div class="cmt-body">' +
       '<div class="reply-head">' +
-        '<span class="rname">' + esc(au.name || '') + '</span>' +
-        '<span>' + esc(ROLES[au.role] || '') + '</span>' +
-        '<span>' + fmtTime(r.at) + '</span>' +
-        editedTag +
+        '<span>' + fmtTime(r.updatedAt || r.at) + '</span>' +
+        (replyDeadline ? '<span class="reply-deadline-hint">' + esc(replyDeadline) + '</span>' : '') +
         (orphanParent ? '<span class="cmt-confirm-tag">回复他人</span>' : '') +
       '</div>' +
       '<div class="reply-content">' + esc(r.content) + '</div>' +
+      '<div class="reply-participants">参与编辑：' + esc(collaboratorText) + '</div>' +
       attsHtml(r.attachments) +
       '<div class="cmt-foot">' +
         '<button class="like-btn' + (liked ? ' on' : '') + '" id="like_' + r.id + '" onclick="toggleLike(\'' + r.id + '\')">' + (liked ? '已赞 ' : '赞 ') + (r.likeCount || 0) + '</button>' +
@@ -1936,6 +2090,20 @@ function pickCommentPool(m, me) {
 }
 
 /* ---------- 评论流卡片列表 ---------- */
+function replyDeadlineHint(m) {
+  const replies = repliesOf(m.id);
+  const activeLinks = linksOf(m.id).filter(linkActive).sort((a, b) => (b.dispatchedAt || 0) - (a.dispatchedAt || 0));
+  const basis = replies.length
+    ? replies[0]
+    : (activeLinks[0] ? { at: activeLinks[0].dispatchedAt || m.createdAt, poolId: activeLinks[0].poolId } : null);
+  if (!basis) return '';
+  const deadline = replyEditDeadline(basis);
+  if (!deadline) return '';
+  const ended = m.status === 'closed' || m.status === 'cancelled' || Date.now() >= deadline;
+  const when = m.closedAt && m.closedAt < deadline ? m.closedAt : deadline;
+  return (ended ? '回复已于 ' : '回复将于 ') + fmtMonthTime(when) + ' 关闭';
+}
+
 function commentAreaHtml(me, m) {
   const threads = visibleThreads(me, m);
   const isFull = isAdmin(me) || isDispatcher(me);
@@ -1978,6 +2146,10 @@ function mentionCandidates(m) {
 window.openCommentPanel = (msgId) => {
   const m = findMsg(msgId);
   if (!m) return;
+  if (isEnded(m)) {
+    toast('消息已解决，回复已关闭');
+    return;
+  }
   if (repliesOf(m.id).length > 0) {
     toast('已有人回复，请直接点击编辑修改回复');
     return;
@@ -2143,13 +2315,38 @@ window.submitCommentReply = (msgId, parentId) => {
   render();
 };
 
-/* 分发去向文案：池/部门（收件人，抄送业务池负责人） */
+/* 分发与抄送分别展示，避免把知悉人揉进主办链路。 */
 function dispatchTargetsText(m) {
   return linksOf(m.id).map((l) => {
     const who = peopleBrief(recipientsOf(l));
-    const cc = ccOf(l).map(userName);
-    return poolName(l.poolId) + (who ? '（' + who + (cc.length ? '，抄送 ' + cc.join('、') : '') + '）' : '');
+    return poolName(l.poolId) + (who ? '（' + who + '）' : '');
   }).join('、');
+}
+
+function dispatchCcText(m) {
+  const ids = [...new Set(linksOf(m.id).flatMap((l) => ccOf(l)).concat(m.sharedUserIds || []))];
+  return peopleBrief(ids);
+}
+
+function logDispatchLinks(m, l) {
+  return linksOf(m.id).filter((link) =>
+    link.dispatchedBy === l.actorId && Math.abs((link.dispatchedAt || 0) - l.at) < 1000);
+}
+
+function dispatchTimelineText(m, l) {
+  const related = logDispatchLinks(m, l);
+  if (!related.length) return '';
+  const primary = related.map((link) => {
+    const who = peopleBrief(recipientsOf(link));
+    return poolName(link.poolId) + (who ? '（' + who + '）' : '');
+  }).join('、');
+  const ccIds = [...new Set(related.flatMap((link) => ccOf(link)))];
+  const cc = peopleBrief(ccIds);
+  const actionLabel = l.action === 'forwarded' ? '流转至：' : '分发至：';
+  return '<div class="tl-action-lines">' +
+    '<div><b>' + esc(userName(l.actorId)) + '</b> ' + actionLabel + esc(primary) + '</div>' +
+    (cc ? '<div>抄送：' + esc(cc) + '</div>' : '') +
+  '</div>';
 }
 
 function renderDetail(id) {
@@ -2165,6 +2362,7 @@ function renderDetail(id) {
 
   /* 头部（客户信息标签融合在主卡片内：仅池处理人员可见，提出人不可见，点击跳客户信息页） */
   const targets = dispatchTargetsText(m);
+  const ccTargets = dispatchCcText(m);
   const head = '<div class="card detail-head">' +
     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
       '<span class="detail-no">' + m.no + '</span>' + cardStatusBadgeHtml(m) + messageTagsHtml(m) +
@@ -2182,7 +2380,7 @@ function renderDetail(id) {
     (links.length
       ? '<div class="detail-info-line"><span class="detail-info-label">分发至：</span><span>' + esc(targets) + '</span></div>'
       : '<div class="detail-info-line"><span class="detail-info-label">分发状态：</span><span>待李倩影分发</span></div>') +
-    ((m.sharedUserIds && m.sharedUserIds.length) ? '<div class="detail-info-line"><span class="detail-info-label">分享给了：</span><span>' + esc(peopleBrief(m.sharedUserIds)) + '</span></div>' : '') +
+    (ccTargets ? '<div class="detail-info-line"><span class="detail-info-label">抄送：</span><span>' + esc(ccTargets) + '</span></div>' : '') +
     '<div class="content-box">' + esc(m.content) + '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
@@ -2200,8 +2398,9 @@ function renderDetail(id) {
     '全局时间线' +
     '<span class="sub">流转日志</span></div>' +
     (logs.length ? logs.map((l) => {
+      const dispatchText = (l.action === 'dispatched' || l.action === 'forwarded') ? dispatchTimelineText(m, l) : '';
       return '<div class="tl-item tl-key">' +
-        '<div class="tl-text"><b>' + esc(userName(l.actorId)) + '</b> ' + esc(logText(l)) + '</div>' +
+        '<div class="tl-text">' + (dispatchText || ('<b>' + esc(userName(l.actorId)) + '</b> ' + esc(logText(l)))) + '</div>' +
         '<div class="tl-time">' + fmtTime(l.at) + '</div></div>';
     }).join('') : empty('暂无记录')) + '</div>';
 
@@ -2223,6 +2422,20 @@ var pmState = {
   modal: null
 };
 window.pmState = pmState;
+
+const REPLY_CLOSE_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+function pmReplyCloseWeekday(pool) {
+  const weekday = Number(pool && pool.replyCloseWeekday != null ? pool.replyCloseWeekday : 5);
+  return weekday >= 0 && weekday <= 6 ? weekday : 5;
+}
+function pmReplyCloseTime(pool) {
+  return pool && /^\d{2}:\d{2}$/.test(pool.replyCloseTime || '') ? pool.replyCloseTime : '18:00';
+}
+function pmReplyCloseOptions(pool) {
+  const current = pmReplyCloseWeekday(pool);
+  return REPLY_CLOSE_WEEKDAYS.map((label, value) =>
+    '<option value="' + value + '"' + (value === current ? ' selected' : '') + '>' + label + '</option>').join('');
+}
 
 function pmGetLevelName(level) {
   if (level === 0) return '业务池';
@@ -2322,6 +2535,8 @@ function pmRenderDetailHtml(pool, me) {
   html += '<div class="pm-meta-item"><div class="lbl">秘书</div><div class="val">' + (secIds.length ? esc(secIds.map(userName).join('、')) : '—') + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">成员规模</div><div class="val">' + memberList.length + ' 人</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">办结时限</div><div class="val">' + (pool.timeoutDays || 2) + ' 天</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">回复编辑关闭</div><div class="val">' +
+    REPLY_CLOSE_WEEKDAYS[pmReplyCloseWeekday(pool)] + ' ' + pmReplyCloseTime(pool) + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">管辖层级</div><div class="val">' + pmGetLevelName(pool.level) + '</div></div>';
   html += '</div>'; // .pm-detail-meta-grid
 
@@ -2396,7 +2611,14 @@ function pmRenderDetailHtml(pool, me) {
     html += '<div class="form-row"><div class="form-label">办结时限要求 (天)</div>' +
       '<input type="number" id="inlinePoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" ' + (!canEdit ? 'disabled' : '') + '></div>';
 
-    html += '<div class="form-hint">8 个业务池为填报入口，进池消息直投该池负责人+秘书，总池分发人李倩影同步跟进并可继续分发；池本身不设其他分发人。</div>';
+    html += '<div class="pm-reply-rule-grid">' +
+      '<div class="form-row"><div class="form-label">联合回复关闭日</div>' +
+        '<select id="inlineReplyCloseWeekday" ' + (!canEdit ? 'disabled' : '') + '>' + pmReplyCloseOptions(pool) + '</select></div>' +
+      '<div class="form-row"><div class="form-label">关闭时间</div>' +
+        '<input type="time" id="inlineReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" ' + (!canEdit ? 'disabled' : '') + '></div>' +
+    '</div>';
+
+    html += '<div class="form-hint">同一分发链路的多人共享一条回复；任一成员提交或编辑即视为联合回复，到最近一次配置的关闭时刻后自动锁定。子级池默认继承业务池规则。</div>';
 
     if (canEdit) {
       html += '<div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">' +
@@ -2478,7 +2700,11 @@ function pmRenderModalHtml(me) {
               '<label>办理时限（天）</label>' +
               '<input type="number" id="editPoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" />' +
             '</div>' +
-            '<div class="hint">消息进池后直投池负责人+秘书，总池分发人李倩影同步跟进并可继续分发，池内不再设置其他分发人</div>' +
+            '<div class="pm-reply-rule-grid">' +
+              '<div class="pm-form-row"><label>联合回复关闭日</label><select id="editReplyCloseWeekday">' + pmReplyCloseOptions(pool) + '</select></div>' +
+              '<div class="pm-form-row"><label>关闭时间</label><input type="time" id="editReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" /></div>' +
+            '</div>' +
+            '<div class="hint">多人共享一条联合回复，到配置时刻后自动关闭编辑；子级池默认继承业务池规则。</div>' +
           '</div>' +
           '<div class="pm-modal-foot">' +
             '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
@@ -2985,8 +3211,10 @@ window.pmUpdateMemberSelectCount = function() {
 window.pmSubmitSettings = function(poolId) {
   const name = document.getElementById('editPoolName').value;
   const timeoutDays = document.getElementById('editPoolTimeout').value;
+  const replyCloseWeekday = document.getElementById('editReplyCloseWeekday').value;
+  const replyCloseTime = document.getElementById('editReplyCloseTime').value;
 
-  const res = updatePool(poolId, { name, timeoutDays });
+  const res = updatePool(poolId, { name, timeoutDays, replyCloseWeekday, replyCloseTime });
   if (res.ok) {
     toast('池设置已成功更新');
     pmState.modal = null;
@@ -2997,11 +3225,15 @@ window.pmSubmitSettings = function(poolId) {
 window.pmSubmitInlineSettings = function(poolId) {
   const nameEl = document.getElementById('inlinePoolName');
   const timeoutEl = document.getElementById('inlinePoolTimeout');
+  const replyCloseWeekdayEl = document.getElementById('inlineReplyCloseWeekday');
+  const replyCloseTimeEl = document.getElementById('inlineReplyCloseTime');
 
   const name = nameEl ? nameEl.value.trim() : '';
   const timeoutDays = timeoutEl ? timeoutEl.value : 2;
+  const replyCloseWeekday = replyCloseWeekdayEl ? replyCloseWeekdayEl.value : 5;
+  const replyCloseTime = replyCloseTimeEl ? replyCloseTimeEl.value : '18:00';
 
-  const res = updatePool(poolId, { name, timeoutDays });
+  const res = updatePool(poolId, { name, timeoutDays, replyCloseWeekday, replyCloseTime });
   if (res.ok) {
     toast('已保存池参数配置');
     render();

@@ -14,6 +14,7 @@
 
 const LS_KEY = 'flow_state_v6';
 const SEED_VERSION = 9;
+const DISABLED_MESSAGE_TAGS = new Set(['高优先级', '需协同']);
 let S = null;
 
 /* ---------- 持久化 ---------- */
@@ -36,7 +37,11 @@ function loadState() {
     });
   }
   if (S && Array.isArray(S.messages)) {
-    S.messages.forEach((m) => { if (!Array.isArray(m.tags)) m.tags = []; });
+    S.messages.forEach((m) => {
+      if (!Array.isArray(m.tags)) m.tags = [];
+      m.tags = m.tags.filter((tag) => !DISABLED_MESSAGE_TAGS.has(tag));
+    });
+    saveState();
   }
   if (S && Array.isArray(S.logs)) {
     S.logs = S.logs.filter((l) => l.action !== 'summary' && l.action !== 'summary_edit');
@@ -98,6 +103,69 @@ function nodeSecretaryNames(pool) { return (pool.secretaryIds || []).map(userNam
 /* 分发目标的收件人与抄送人（链路建好即为静态名单，便于可见性判定） */
 function recipientsOf(l) { return l.recipientIds || (l.handlerId ? [l.handlerId] : []); }
 function ccOf(l) { return l.ccIds || []; }
+
+/* 联合回复参与人：固定取该回复所属分发链路的收件人。
+ * 任一成员提交或编辑后，都视为这组人的联合回复；后续链路变化不影响已记录名单。 */
+function replyCollaboratorIds(r) {
+  if (!r) return [];
+  if (Array.isArray(r.collaboratorIds) && r.collaboratorIds.length) {
+    return [...new Set(r.collaboratorIds.filter(Boolean))];
+  }
+  const directLink = r.linkId ? linkById(r.linkId) : null;
+  const poolLink = directLink || linksOf(r.messageId).find((l) => l.poolId === r.poolId && recipientsOf(l).includes(r.authorId));
+  const ids = [];
+  let link = poolLink;
+  /* 子级池的回复沿用整条分发链路，父级收件人也可共同编辑。 */
+  while (link) {
+    ids.push(...recipientsOf(link));
+    link = link.parentLinkId ? linkById(link.parentLinkId) : null;
+  }
+  return [...new Set((ids.length ? ids : [r.authorId]).filter(Boolean))];
+}
+
+function replyCollaboratorNames(r) {
+  if (!r) return [];
+  const ids = replyCollaboratorIds(r).concat([r.authorId, r.lastEditorId]);
+  (S.logs || []).forEach((log) => {
+    if (log.messageId !== r.messageId || log.meta?.replyId !== r.id) return;
+    if (log.action === 'reply' || log.action === 'reply_edit') ids.push(log.actorId);
+  });
+  return [...new Set(ids.filter(Boolean))].map(userName).filter(Boolean);
+}
+
+/* 联合编辑关闭规则按回复所在池向上继承，默认每周五 18:00。
+ * 正式环境可由后端配置中心直接下发同结构字段。 */
+function replyEditPolicyFor(r) {
+  let pool = r && r.poolId ? poolById(r.poolId) : null;
+  while (pool) {
+    if (pool.replyCloseWeekday != null || pool.replyCloseTime) {
+      return {
+        weekday: Number(pool.replyCloseWeekday == null ? 5 : pool.replyCloseWeekday),
+        time: /^\d{2}:\d{2}$/.test(pool.replyCloseTime || '') ? pool.replyCloseTime : '18:00'
+      };
+    }
+    pool = pool.parentId ? poolById(pool.parentId) : null;
+  }
+  return { weekday: 5, time: '18:00' };
+}
+
+function replyEditDeadline(r) {
+  if (!r || !r.at) return 0;
+  const policy = replyEditPolicyFor(r);
+  const parts = policy.time.split(':').map(Number);
+  const submitted = new Date(r.at);
+  const deadline = new Date(r.at);
+  deadline.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
+  const daysAhead = (policy.weekday - submitted.getDay() + 7) % 7;
+  deadline.setDate(deadline.getDate() + daysAhead);
+  if (deadline.getTime() <= r.at) deadline.setDate(deadline.getDate() + 7);
+  return deadline.getTime();
+}
+
+function replyEditClosed(r, now) {
+  const deadline = replyEditDeadline(r);
+  return !!deadline && (now == null ? Date.now() : now) >= deadline;
+}
 
 /* 某池所属业务池（沿 parentId 上溯到顶层业务池）的负责人。
  * 指定落实人时抄送这批人，落实人本人由调用方过滤。 */
@@ -321,7 +389,7 @@ function normalizeTargets(list) {
     if (mode === 'people') {
       const ids = [...new Set((t.recipientIds || []).filter(Boolean))];
       if (!ids.length) return;
-      const cc = (t.ccIds || bizOwnersOf(pool.id)).filter((id) => ids.indexOf(id) === -1);
+      const cc = (t.ccIds || []).filter((id) => ids.indexOf(id) === -1);
       out.push({ poolId: pool.id, mode: 'people', recipientIds: ids, ccIds: [...new Set(cc)] });
       return;
     }
@@ -329,7 +397,7 @@ function normalizeTargets(list) {
       const ids = Array.isArray(t.handlerId) ? t.handlerId.filter(Boolean) : (t.handlerId ? [t.handlerId] : []);
       if (!ids.length) return;
       ids.forEach((uid) => {
-        const cc = (t.ccIds || bizOwnersOf(pool.id)).filter((id) => id !== uid);
+        const cc = (t.ccIds || []).filter((id) => id !== uid);
         out.push({ poolId: pool.id, mode: 'person', recipientIds: [uid], ccIds: [...new Set(cc)] });
       });
     } else {
@@ -349,7 +417,7 @@ function targetLabel(pool, t) {
     const who = names.length > 4
       ? names.slice(0, 3).join('、') + ' 等 ' + names.length + ' 人'
       : names.join('、');
-    return who + (cc.length ? '（抄送业务池负责人 ' + cc.join('、') + '）' : '');
+      return who + (cc.length ? '（抄送 ' + cc.join('、') + '）' : '');
   }
   const owner = nodeOwnerNames(pool).join('、');
   const sec = nodeSecretaryNames(pool).join('、');
@@ -530,6 +598,7 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   const r = {
     id: 'rp_' + Math.random().toString(36).slice(2, 9),
     messageId: msgId, poolId, linkId: link ? link.id : null, authorId: me.id,
+    collaboratorIds: link ? recipientsOf(link).slice() : [me.id],
     parentReplyId: parent ? parent.id : null,
     content, attachments: attachments || [], at: Date.now(),
     likeCount: 0, likedByUserIds: []
@@ -546,16 +615,22 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
 }
 
 /* ---------- 动作：编辑回复（被指派人和李倩影共编同一条回复，流转日志记录谁编辑回复） ---------- */
-function editReply(msgId, replyId, content) {
+function editReply(msgId, replyId, content, attachments) {
   const me = curUser();
   const m = findMsg(msgId);
   const r = S.replies.find((x) => x.id === replyId);
   if (!m || !r) return { ok: false, msg: '回复不存在' };
+  if (replyEditClosed(r)) return { ok: false, msg: '联合回复编辑时间已截止，当前内容已锁定' };
+  if (typeof canEditReply === 'function' && !canEditReply(me, m, r)) {
+    return { ok: false, msg: '当前身份不在该联合回复的编辑成员中' };
+  }
   const text = (content || '').trim();
   if (!text) return { ok: false, msg: '请输入回复内容' };
   r.content = text;
+  if (Array.isArray(attachments)) r.attachments = attachments.slice();
   r.updatedAt = Date.now();
   r.lastEditorId = me.id;
+  r.collaboratorIds = [...new Set((r.collaboratorIds || []).concat(me.id))];
   m.updatedAt = Date.now();
   addLog(m.id, me.id, 'reply_edit', {
     replyId: r.id,
@@ -624,7 +699,6 @@ function toggleMsgLike(msgId, userId) {
 }
 
 /* ---------- 动作：标记整条信息已解决（李倩影与发起人本人） ---------- */
-/* 李倩影手动标已解决的前置：所有最终链路的处理人都已回复，且她已发布过汇总 */
 function allHandlersReplied(m) {
   const finals = finalLinksOf(m.id);
   if (!finals.length) return false;
@@ -636,9 +710,6 @@ function resolveMessage(msgId) {
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canResolveMessage(me, m)) return { ok: false, msg: '只有李倩影或发起人本人可以标记已解决' };
-  if (isDispatcher(me) || isAdmin(me)) {
-    if (!allHandlersReplied(m)) return { ok: false, msg: '还有处理人未回复，暂不能标记已解决' };
-  }
   const now = Date.now();
   linksOf(msgId).filter((link) => linkActive(link) && link.isFinal).forEach((link) => {
     link.status = 'resolved';
@@ -748,9 +819,29 @@ function reviewPoolApp(appId, pass) {
 /* ---------- 池统计与消息检索 ---------- */
 function isMessageOverdue(m) {
   if (!m || m.status === 'closed' || m.status === 'cancelled') return false;
-  if (m.overdue) return true;
-  // 超过48小时未完成判定为超时
-  return (Date.now() - m.createdAt) > 48 * 3600e3;
+  if (repliesOf(m.id).length && !isLonglineMessage(m)) return false;
+  const deadline = messageReplyDeadline(m);
+  return !!deadline && Date.now() >= deadline;
+}
+
+function isLonglineMessage(m) {
+  return !!m && (m.tags || []).includes('长线任务');
+}
+
+/* 以首次投递为起点，7天内必须出现回复；长线任务在每次回复后重新开启下一周期。 */
+function messageReplyDeadline(m) {
+  if (!m || m.status === 'closed' || m.status === 'cancelled') return 0;
+  const replies = repliesOf(m.id);
+  const latest = isLonglineMessage(m) && replies.length ? replies[replies.length - 1] : null;
+  const startAt = latest ? (latest.updatedAt || latest.at) : m.createdAt;
+  return startAt + 7 * 24 * 3600e3;
+}
+
+function messageOverdueDays(m, now) {
+  const deadline = messageReplyDeadline(m);
+  if (!deadline) return 0;
+  const diff = (now == null ? Date.now() : now) - deadline;
+  return diff < 0 ? 0 : Math.max(1, Math.ceil(diff / (24 * 3600e3)));
 }
 
 function poolMessages(poolId, includeSub = true) {
@@ -880,6 +971,13 @@ function updatePool(poolId, patch) {
   }
 
   if (patch.timeoutDays != null) p.timeoutDays = Number(patch.timeoutDays) || 2;
+  if (patch.replyCloseWeekday != null) {
+    const weekday = Number(patch.replyCloseWeekday);
+    p.replyCloseWeekday = weekday >= 0 && weekday <= 6 ? weekday : 5;
+  }
+  if (patch.replyCloseTime != null) {
+    p.replyCloseTime = /^\d{2}:\d{2}$/.test(patch.replyCloseTime) ? patch.replyCloseTime : '18:00';
+  }
   if (patch.secretaryIds !== undefined) {
     p.secretaryIds = Array.isArray(patch.secretaryIds)
       ? [...new Set(patch.secretaryIds.filter(Boolean))] : (patch.secretaryIds ? [patch.secretaryIds] : []);

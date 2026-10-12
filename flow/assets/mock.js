@@ -17,7 +17,7 @@ const ROLES = {
 /* ---------- Mock 用户 ----------
  * 扩展点：USERS 由企业微信通讯录接口返回 */
 const USERS = [
-  { id: 'u_zs',  name: '张三',     wecom: 'zhangsan', dept: '信息技术部',     role: 'staff',      title: '普通员工' },
+  { id: 'u_zs',  name: '董丹璐',   wecom: 'dongdanlu', dept: '营销管理服务部 期权部', role: 'staff', title: '员工' },
   { id: 'u_qy',  name: '李倩影',   wecom: 'qianying', dept: '总裁办',         role: 'dispatcher', title: '总池分发人' },
   /* 8 个业务池负责人（中后台与其他由总池分发人李倩影兼管） */
   { id: 'u_zjj', name: '张晶晶',   wecom: 'zhangjj',  dept: '零售条线',       role: 'poolAdmin',  title: '零售池负责人' },
@@ -55,7 +55,8 @@ const USERS = [
   { id: 'u_fc',  name: '冯超',     wecom: 'fengchao', dept: '财富管理部',     role: 'staff',      title: '高净值服务岗' },
   { id: 'u_hx',  name: '韩雪',     wecom: 'hanxue',   dept: '国际业务部',     role: 'staff',      title: '跨境服务岗' },
   { id: 'u_ch',  name: '曹航',     wecom: 'caohang',  dept: '信息技术部',     role: 'staff',      title: '运维岗' },
-  { id: 'u_adm', name: '系统管理员', wecom: 'sysadmin', dept: '信息技术部',   role: 'admin',      title: '管理员' }
+  { id: 'u_adm', name: '系统管理员', wecom: 'sysadmin', dept: '信息技术部',   role: 'admin',      title: '管理员' },
+  { id: 'u_wyq', name: '王燕勤',   wecom: 'wangyanqin', dept: '产品内容',     role: 'staff',      title: '产品内容员工' }
 ];
 
 /* ---------- Mock 组织架构 ----------
@@ -433,21 +434,21 @@ function buildSeed() {
   ];
 
   const notifications = [
-    { id: 'n1',  at: T(50), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm1', content: '张三提交的新消息 M-0001《宏远钢铁贸易有限公司》已进入零售池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n1',  at: T(50), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm1', content: '董丹璐提交的新消息 M-0001《宏远钢铁贸易有限公司》已进入零售池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n2',  at: T(49), to: 'u_ls',  actorId: 'u_qy',  type: 'assign', messageId: 'm1', content: '李倩影将消息 M-0001《宏远钢铁贸易有限公司》分发给华东零售组处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n3',  at: T(49), to: 'u_cc',  actorId: 'u_qy',  type: 'cc',     messageId: 'm1', content: '消息 M-0001《宏远钢铁贸易有限公司》分发到华东零售组，抄送你（部门负责人）', channel: '企业微信', status: '模拟发送' },
     { id: 'n4',  at: T(45), to: 'u_zs',  actorId: 'u_qy',  type: 'summary', messageId: 'm1', content: '李倩影已发布 M-0001 的汇总回复', channel: '企业微信', status: '模拟发送' },
-    { id: 'n5',  at: T(30), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm2', content: '张三提交的新消息 M-0002《金泰有色金属有限公司》已进入产业池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n5',  at: T(30), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm2', content: '董丹璐提交的新消息 M-0002《金泰有色金属有限公司》已进入产业池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n6',  at: T(29), to: 'u_zm',  actorId: 'u_qy',  type: 'assign', messageId: 'm2', content: '李倩影将消息 M-0002《金泰有色金属有限公司》分发给产业服务部处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n7',  at: T(27), to: 'u_hw',  actorId: 'u_zm',  type: 'assign', messageId: 'm2', content: '周明将消息 M-0002《金泰有色金属有限公司》流转给你落实', channel: '企业微信', status: '模拟发送' },
-    { id: 'n8',  at: T(3),  to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm3', content: '张三提交的新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入中后台池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n8',  at: T(3),  to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm3', content: '董丹璐提交的新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入中后台池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n9',  at: T(58), to: 'u_qy',  actorId: 'u_ly',  type: 'assign', messageId: 'm4', content: '李研提交的新消息 M-0004《多家同业反馈策略报告延迟发布》已进入零售池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n10', at: T(7),  to: 'u_cl',  actorId: 'u_qy',  type: 'assign', messageId: 'm5', content: '李倩影将消息 M-0005《交易系统早盘登录异常》分发给国际业务部处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n11', at: T(51), to: 'u_wd',  actorId: 'u_qy',  type: 'assign', messageId: 'm6', content: '李倩影将消息 M-0006《二季度宏观解读路演安排》分发给机构业务一部处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n12', at: T(51), to: 'u_hj',  actorId: 'u_qy',  type: 'cc',     messageId: 'm6', content: '消息 M-0006《二季度宏观解读路演安排》分发到机构业务一部，抄送你（秘书）', channel: '企业微信', status: '模拟发送' },
     { id: 'n13', at: T(69), to: 'u_s7',  actorId: 'u_qy',  type: 'assign', messageId: 'm7', content: '李倩影将消息 M-0007《华东区域重点客户结算核对》分发给量化私募部处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n14', at: T(60), to: 'u_zs',  actorId: 'u_qy',  type: 'summary', messageId: 'm7', content: '李倩影已发布 M-0007 的汇总回复，信息已完成', channel: '企业微信', status: '模拟发送' },
-    { id: 'n15', at: T(20), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm8', content: '张三提交的新消息 M-0008《重点机构准入补充资料说明》已进入财富池，待分发', channel: '企业微信', status: '模拟发送' },
+    { id: 'n15', at: T(20), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm8', content: '董丹璐提交的新消息 M-0008《重点机构准入补充资料说明》已进入财富池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n16', at: T(3),  to: 'u_mxf', actorId: 'u_qy',  type: 'assign', messageId: 'm9', content: '李倩影将消息 M-0009《高净值客户资产配置咨询》分发给综合事务部处理', channel: '企业微信', status: '模拟发送' }
   ];
 
