@@ -289,6 +289,12 @@ function canReopenMessage(u, m) {
   return isDispatcher(u) || isExecutive(u) || u.id === m.createdBy;
 }
 
+/* 已解决后发起人的满意度回访（满意/不满意）：只写日志，不改流程。
+ * 李倩影例外——关闭与退回的开关在她手上，她的底栏保留「未解决」 */
+function canGiveFeedback(u, m) {
+  return !!u && !!m && m.status === 'closed' && u.id === m.createdBy && !isDispatcher(u);
+}
+
 /* 我作为处理人、链接在办且尚未提交的链接（决定评论提交后是否弹 结束处理/流转） */
 function myActiveUnsubmittedLink(u, m) {
   return linksOf(m.id).find((l) => linkTodoFor(u, l) && linkActive(l) && !hasHandledInPool(u, m, l.poolId)) || null;

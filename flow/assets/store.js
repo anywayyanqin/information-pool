@@ -777,6 +777,22 @@ function recordResolveMark(msgId, mark) {
   return { ok: true, msg: '已记录为' + mark };
 }
 
+/* 发起人对「已解决」的满意度回访：只写日志与新字段，
+ * 不碰 m.status / m.updatedAt，也不进任何工作台筛选条件，因此完全不影响流转 */
+function recordSatisfaction(msgId, verdict) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (verdict !== '满意' && verdict !== '不满意') return { ok: false, msg: '只能反馈满意或不满意' };
+  if (m.status !== 'closed') return { ok: false, msg: '流程尚未结束，待标记已解决后再反馈' };
+  if (m.satisfaction === verdict) return { ok: false, msg: '已反馈过：' + verdict };
+  m.satisfaction = verdict;
+  m.satisfactionAt = Date.now();
+  addLog(m.id, me.id, 'resolve_mark', { note: me.name + '反馈：' + verdict });
+  saveState();
+  return { ok: true, msg: '已记录反馈：' + verdict };
+}
+
 /* ---------- 动作：取消消息（提出人） ---------- */
 function cancelMessage(msgId) {
   const me = curUser();
