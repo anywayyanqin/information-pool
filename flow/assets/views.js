@@ -1969,12 +1969,12 @@ window.detailSearchKeydown = (event) => {
   }
 };
 
-/* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它提示去编辑那条（新分发进来的人同样是编辑成员） ---------- */
+/* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它直接进那条回复的编辑弹窗 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
   const hasReply = repliesOf(m.id).length > 0;
   const comment = !isEnded(m) ? '<div class="bar-comment">' +
-    '<input class="bar-comment-input" readonly placeholder="' + (hasReply ? '已有联合回复，点击可去编辑' : '说点什么...') + '" onclick="openCommentPanel(\'' + m.id + '\')">' +
+    '<input class="bar-comment-input" readonly placeholder="' + (hasReply ? '已有联合回复，点击可直接编辑' : '说点什么...') + '" onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
   const tagIcon = '<svg class="bar-action-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13l-7 7L4 11V4h7l9 9z"></path><circle cx="8.5" cy="8.5" r="1.5"></circle></svg>';
@@ -2150,8 +2150,10 @@ window.openCommentPanel = (msgId) => {
     toast('消息已解决，回复已关闭');
     return;
   }
-  if (repliesOf(m.id).length > 0) {
-    toast('这条消息已有联合回复，请在该回复上点「编辑」补充');
+  const joint = repliesOf(m.id)[0];
+  if (joint) {
+    /* 一条消息一条联合回复：已有回复时这个入口直接进编辑弹窗，能不能编辑由 openEditReplyModal 判定 */
+    openEditReplyModal(msgId, joint.id);
     return;
   }
   cmtPanel = { msgId, content: '', atts: [], recording: false, showAt: false, atKw: '', showImg: false };
