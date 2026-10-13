@@ -11,6 +11,7 @@ const ROLES = {
   poolAdmin: '业务池负责人',
   deptAdmin: '部门负责人',
   secretary: '秘书',
+  exec: '高管',
   admin: '系统管理员'
 };
 
@@ -28,7 +29,7 @@ const USERS = [
   { id: 'u_nty', name: '倪韬雍',   wecom: 'nity',     dept: '国际条线',       role: 'poolAdmin',  title: '国际池负责人' },
   /* 条线资深员工（原业务池负责人，现归入条线经办） */
   { id: 'u_qx',  name: '齐旭',     wecom: 'qixu',     dept: '买方条线',       role: 'staff',      title: '买方条线资深经理' },
-  { id: 'u_zyy', name: '张烨烨',   wecom: 'zhangyy',  dept: '财富条线',       role: 'staff',      title: '财富条线资深经理' },
+  { id: 'u_zyy', name: '张烨烨',   wecom: 'zhangyy',  dept: '财富条线',       role: 'exec',       title: '高管' },
   { id: 'u_dyw', name: '丁彦文',   wecom: 'dingyw',   dept: '中后台条线',     role: 'staff',      title: '中后台条线资深经理' },
   { id: 'u_lj',  name: '刘军',     wecom: 'liujun',   dept: '综合条线',       role: 'staff',      title: '综合条线资深经理' },
   /* 部门负责人 */

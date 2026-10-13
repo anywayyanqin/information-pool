@@ -13,6 +13,7 @@ const IDENTITY_KEY = 'flow_identity';
 /* 可切换身份：使用通讯录中的真实员工姓名，权限仍沿用对应演示账号。 */
 const IDENTITY_CHOICES = [
   { id: 'u_qy',  label: '李倩影' },
+  { id: 'u_zyy', label: '张烨烨' },
   { id: 'u_wjx', label: '王冀湘' },
   { id: 'u_wyx', label: '闻勇翔' },
   { id: 'u_zs',  label: '董丹璐' },
@@ -31,6 +32,18 @@ function isAdmin(u) { return u && u.role === 'admin'; }
 function isDispatcher(u) { return u && (u.role === 'dispatcher' || u.id === 'u_qy'); }
 function isExecutive(u) {
   return !!u && (isAdmin(u) || u.role === 'poolAdmin' || u.role === 'deptAdmin');
+}
+
+/* 高管＝只读浏览者：全公司 8 个池的信息都能看，但不发言、不分发、不标记。
+ * 有意不并入 isExecutive——那个函数代表「池/部门负责人」，带着标记已解决/未解决的权力。 */
+function isExecRole(u) { return !!u && u.role === 'exec'; }
+function ownsAnyPool(u) {
+  return !!u && !!(S && S.pools) && S.pools.some((p) => (p.ownerIds || []).includes(u.id));
+}
+/* 本人若同时是池负责人或这条信息的处理人，就按那两个身份的正常权力走 */
+function isReadOnlyExec(u, m) {
+  if (!isExecRole(u) || ownsAnyPool(u)) return false;
+  return !(m && isHandlerOf(u, m));
 }
 
 /* 当前身份在池体系中的管理根节点（8 个业务池 → 部门 → 小组）：
@@ -128,18 +141,13 @@ function poolManagedSubtreeIds(u) {
   return getPoolSubtree(root.id).map((p) => p.id);
 }
 
-/* 权限：能否设置某池的负责人（业务池负责人只有总池分发人可调整） */
+/* 权限：能否设置某池的共同负责人。总池分发人管全部；
+ * 各池负责人（含一级业务池负责人）可配本池，但动不了上级池 */
 function canSetPoolOwner(u, pool) {
   if (!pool) return false;
   if (isDispatcher(u) || isAdmin(u)) return true;
+  if ((pool.ownerIds || []).includes(u.id)) return true;
   if (pool.level === 0) return false;
-  return poolManagedSubtreeIds(u).includes(pool.id);
-}
-
-/* 权限：能否管理池成员 */
-function canManagePoolMembers(u, pool) {
-  if (!pool) return false;
-  if (isDispatcher(u) || isAdmin(u)) return true;
   return poolManagedSubtreeIds(u).includes(pool.id);
 }
 
@@ -172,11 +180,13 @@ function linkVisibleTo(u, l) {
 }
 
 /* 消息对当前用户是否可见：
- * 管理员与总池分发人看全部 8 个池的消息；
- * 发起人看本人提交的；收件人/抄送人看分发给自己的；被分享人可查看。 */
+ * 管理员与总池分发人看全部 8 个池的消息；高管同为只读全量可见；
+ * 发起人看本人提交的；收件人/抄送人看分发给自己的；被分享人可查看；
+ * 已解决与被设为公开的人人可查。 */
 function canSeeMessage(u, m) {
   if (isAdmin(u) || isDispatcher(u)) return true;
-  if (m.status === 'closed') return true;
+  if (isExecRole(u)) return true;
+  if (m.status === 'closed' || m.isPublic) return true;
   if (m.createdBy === u.id) return true;
   if ((m.sharedUserIds || []).includes(u.id)) return true;
   return linksOf(m.id).some((l) => linkVisibleTo(u, l));
@@ -205,12 +215,13 @@ function isHandlerOf(u, m) {
 }
 
 /* 回复可见性（覆盖旧「所有参与方可见全部回复」规则）：
- * 总池分发人/管理员看全部处理人回复；
+ * 总池分发人/管理员与高管看全部处理人回复（高管只读，不可发言）；
  * 处理人可看到所处理信息下的所有回复；
  * 发起人只能看到自己的回复；
  * 倩影的汇总回复不在此列，对所有可见者开放（详情页时间线的汇总节点）。 */
 function canSeeReply(u, m, r) {
   if (isAdmin(u) || isDispatcher(u)) return true;
+  if (isExecRole(u)) return true;
   if (m.status === 'closed') return true;
   if (isHandlerOf(u, m)) return true;
   if (linksOf(m.id).some((l) => l.id === r.linkId && ccOf(l).includes(u.id))) return true;
@@ -239,7 +250,7 @@ function canEditReply(u, m, r) {
  * 只有 'auto' 这类系统自动状态变更不展示。 */
 function visibleLogs(u, m) {
   const allowed = ['created', 'directed', 'dispatched', 'forwarded', 'reply', 'reply_edit',
-    'closed', 'reopened', 'resolve_mark', 'tagged', 'urge', 'shared', 'cancelled', 'transfer', 'supplement'];
+    'closed', 'reopened', 'resolve_mark', 'tagged', 'urge', 'shared', 'cancelled', 'transfer', 'supplement', 'content_edit', 'published'];
   const seen = new Set();
   return logsOf(m.id).filter((l) => {
     if (!allowed.includes(l.action)) return false;
@@ -283,9 +294,11 @@ function canResolveMessage(u, m) {
   return isDispatcher(u) || isExecutive(u);
 }
 
-/* 标记未解决（把已解决退回处理中）：李倩影与池/部门负责人 */
+/* 标为未解决：已解决的退回处理中；到办结时限自动关闭的「待确认」退回继续办理
+ * （李倩影与池/部门负责人） */
 function canReopenMessage(u, m) {
-  if (!u || !m || m.status !== 'closed') return false;
+  if (!u || !m || m.status === 'cancelled') return false;
+  if (m.status !== 'closed' && !isPendingConfirm(m)) return false;
   return isDispatcher(u) || isExecutive(u);
 }
 

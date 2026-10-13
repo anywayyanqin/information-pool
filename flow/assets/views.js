@@ -30,11 +30,6 @@ function badge(status) { return '<span class="badge b-' + status + '">' + (MSG_S
 
 /* 流程是否已结束：倩影发布汇总回复后即视为结束 */
 function isEnded(m) { return m.status === 'closed' || m.status === 'cancelled'; }
-/* 是否有处理人（链路收件人）给过回复：李倩影的「待汇总」与「已办」以它分界 */
-function hasHandlerReply(m) {
-  const ids = linksOf(m.id).flatMap((l) => recipientsOf(l));
-  return repliesOf(m.id).some((r) => ids.includes(r.authorId));
-}
 /* 主流程状态（相对当前身份），计算优先级：已解决 > 待办 > 待分发 > 已办。
  * 「我发起的」不参与主状态计算，作为附加标签并存。 */
 function flowStatus(m, me) {
@@ -51,11 +46,12 @@ function flowStatus(m, me) {
   if (myActiveUnsubmittedLink(me, m)) return 'todo';
   return 'done';
 }
-/* 卡片与详情头部的状态标签：流程未结束一律显示「办理中」，李倩影标记解决后才显示「已解决」。
+/* 卡片与详情头部的状态标签：办理中 → 到办结时限自动关闭转「待确认」→ 李倩影确认后才「已解决」。
  * 待分发/待办/已办只用于工作台标签分区与状态筛选，不再出现在卡片上。 */
 function cardStatusBadgeHtml(m) {
   if (m.status === 'closed') return '<span class="badge b-ended">已解决</span>';
   if (m.status === 'cancelled') return '<span class="badge b-cancelled">已取消</span>';
+  if (isPendingConfirm(m)) return '<span class="badge b-confirm">待确认</span>';
   return '<span class="badge b-handling">办理中</span>';
 }
 function attsHtml(atts) {
@@ -142,22 +138,31 @@ let wbTab = null;   /* null = 默认进入「广场」 */
 let wbPool = 'all';
 let wbStatus = '';
 let wbTag = '';
+let wbSource = '';
 let wbKw = '';
 let wbSortKey = 'updatedAt';   /* 表格列头排序，默认按最近更新倒序 */
 let wbSortDir = -1;
 
 /* 工作台筛选栏：逾期对李倩影、经办人和高管均可见。 */
 function wbTabs() {
-  const canViewAll = isDispatcher(curUser()) || isExecutive(curUser());
-  if (canViewAll) {
+  const me = curUser();
+  if (isDispatcher(me) || isExecutive(me)) {
     return [
       { key: 'todo', name: '待办' },
       { key: 'overdue', name: '逾期' },
-      { key: 'unresolved', name: '未解决' },
       { key: 'mine', name: '我发起的' },
       { key: 'all', name: '全部' },
       { key: 'ended', name: '已解决' },
       { key: 'done', name: '已办' }
+    ];
+  }
+  /* 高管只浏览不办理，没有待办/已办，进「全部」翻所有池子的信息 */
+  if (isExecRole(me)) {
+    return [
+      { key: 'all', name: '全部' },
+      { key: 'overdue', name: '逾期' },
+      { key: 'mine', name: '我发起的' },
+      { key: 'ended', name: '已解决' }
     ];
   }
   const tabs = [{ key: 'square', name: '广场' }, { key: 'mine', name: '我发起的' }];
@@ -172,20 +177,31 @@ function effectiveWbTab() {
   if (wbTab && keys.includes(wbTab)) return wbTab;
   const me = curUser();
   if (isDispatcher(me) || isExecutive(me)) return 'todo';
+  if (isExecRole(me)) return 'all';
   const hasTodo = visibleMessages().some((m) => isWbTodo(m, me));
   return hasTodo ? 'todo' : 'square';
+}
+
+/* 广场口径：已解决自动进广场，李倩影「设为公开」的在办信息同样可查阅 */
+function inSquare(m) { return m.status === 'closed' || !!m.isPublic; }
+
+/* 标签下拉里的「设为公开」不是业务标签，而是广场可见性字段，用哨兵值单独筛 */
+const WB_PUBLIC_TAG = '__public__';
+function wbTagMatches(m) {
+  if (!wbTag) return true;
+  return wbTag === WB_PUBLIC_TAG ? !!m.isPublic : (m.tags || []).includes(wbTag);
 }
 
 function wbTabCount(key) {
   const me = curUser();
   let list = key === 'square' ? S.messages.slice() : visibleMessages();
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
-  if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
-  if (key === 'square') return list.filter((m) => m.status === 'closed').length;
+  if (wbSource) list = list.filter((m) => proposalTypeMatches(m, wbSource));
+  list = list.filter(wbTagMatches);
+  if (key === 'square') return list.filter(inSquare).length;
   if (key === 'mine') return list.filter((m) => m.createdBy === me.id).length;
   if (key === 'all') return list.length;
   if (key === 'overdue') return list.filter((m) => isMessageOverdue(m)).length;
-  if (key === 'unresolved') return list.filter((m) => m.resolveMark === '未解决').length;
   if (key === 'todo') return list.filter((m) => isWbTodo(m, me)).length;
   return list.filter((m) => flowStatus(m, me) === key).length;
 }
@@ -214,15 +230,15 @@ function wbList() {
   const tab = effectiveWbTab();
   let list = tab === 'square' ? S.messages.slice() : visibleMessages();
   /* 六个标签按主流程状态分区；「我发起的」按来源过滤，可与其他状态并存 */
-  if (tab === 'square') list = list.filter((m) => m.status === 'closed');
+  if (tab === 'square') list = list.filter(inSquare);
   else if (tab === 'mine') list = list.filter((m) => m.createdBy === me.id);
   else if (tab === 'todo') list = list.filter((m) => isWbTodo(m, me));
-  else if (tab === 'unresolved') list = list.filter((m) => m.resolveMark === '未解决');
   else if (tab === 'overdue') list = list.filter((m) => isMessageOverdue(m));
   else if (tab !== 'all') list = list.filter((m) => flowStatus(m, me) === tab);
   if (wbPool !== 'all') list = list.filter((m) => msgInPool(m, wbPool));
   if (wbStatus) list = list.filter((m) => flowStatus(m, me) === wbStatus);
-  if (wbTag) list = list.filter((m) => (m.tags || []).includes(wbTag));
+  if (wbSource) list = list.filter((m) => proposalTypeMatches(m, wbSource));
+  list = list.filter(wbTagMatches);
   if (wbKw) list = list.filter((m) => msgKeywordMatch(m, wbKw));
   const sorter = WB_SORTERS[wbSortKey] || WB_SORTERS.updatedAt;
   return list.sort((a, b) => {
@@ -238,6 +254,7 @@ window.setWbPool = (id) => { wbPool = id; render(); };
 window.setWbTab = (k) => { wbTab = k; render(); };
 window.setWbStatus = (v) => { wbStatus = v; render(); };
 window.setWbTag = (v) => { wbTag = v; render(); };
+window.setWbSource = (v) => { wbSource = v; render(); };
 window.setWbKw = (v) => { wbKw = v; renderListOnly(); };
 window.openMessage = (id) => { location.hash = '#/message/' + id; };
 
@@ -313,29 +330,43 @@ function peopleBrief(ids, limit) {
   return names.length > max ? names.slice(0, max).join('、') + ' 等 ' + names.length + ' 人' : names.join('、');
 }
 
-/* 在办链路的处理人名单（节点＝负责人+秘书，个人＝指定落实人） */
+/* 在办链路的处理人名单（节点＝负责人+秘书，个人＝指定落实人）；
+ * 还没分发的消息轮着分发人处理，这一段当前处理人就是她 */
 function activeHandlerNames(m) {
   const ids = [...new Set(linksOf(m.id).filter(linkActive).flatMap((l) => recipientsOf(l)))];
+  if (!ids.length && m.status === 'dispatch') return peopleBrief(dispatcherIds());
   return peopleBrief(ids);
 }
 
 /* 工作台与池管理共用的标准信息卡片 */
-function messageListCardHtml(m, me) {
+const VIEWS_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12S6 5.8 12 5.8 21.5 12 21.5 12 18 18.2 12 18.2 2.5 12 2.5 12z"></path><circle cx="12" cy="12" r="2.6"></circle></svg>';
+
+function messageListCardHtml(m, me, showViews) {
   const actLinks = linksOf(m.id).filter(linkActive);
   const handler = activeHandlerNames(m) || '—';
   const src = proposalTypeText(m);
   const latestReply = latestReplyOf(m);
   const latestReplyText = latestReply && latestReply.content ? latestReply.content : '暂无回复';
+  /* 逾期口径与 PC 表格一致：编号下标红「逾期 N 天」，截止时间单独一行 */
+  const overdue = isMessageOverdue(m);
+  const deadline = messageReplyDeadline(m);
 
   return '<div class="msg-row" title="长按查看全部回复" onclick="openMessage(\'' + m.id + '\')" oncontextmenu="openMessage(\'' + m.id + '\'); return false;">' +
     '<div class="msg-row-top">' +
-      '<span class="msg-no">' + esc(m.no) + '</span>' +
+      '<span class="msg-no">' + esc(m.no) +
+        (overdue ? '<span class="msg-overdue">逾期 ' + messageOverdueDays(m) + ' 天</span>' : '') +
+      '</span>' +
       cardStatusBadgeHtml(m) +
       (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handler) + '</span>') +
+      (showViews ? '<span class="msg-views" title="点进详情即算一次浏览，同一人只计一次">' + VIEWS_ICON + ((m.viewedBy || []).length) + '</span>' : '') +
     '</div>' +
     messageTagLineHtml(m) +
     '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src || '—') + '</div>' +
-    '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
+    (deadline ? '<div class="msg-info"><span class="msg-info-label">截止时间：</span><span class="msg-deadline' + (overdue ? ' overdue' : '') + '">' + fmtTime(deadline) + '</span></div>' : '') +
+    '<div class="msg-desc-row"><div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
+      (isRequesterView(me, m) && !isEnded(m)
+        ? '<span class="msg-supplement" onclick="event.stopPropagation();openCommentPanel(\'' + m.id + '\')">我要补充</span>' : '') +
+    '</div>' +
     '<div class="msg-latest-reply"><span class="msg-info-label">最新回复：</span>' + esc(latestReplyText) + '</div>' +
     '<div class="msg-foot">' +
       '<span class="msg-meta">发起人：' + esc(userName(m.createdBy)) + '</span>' +
@@ -357,7 +388,7 @@ function latestReplyOf(m) {
 function wbColumnText(m, key, me) {
   const latest = latestReplyOf(m);
   if (key === 'no') return m.no || '';
-  if (key === 'status') return m.status === 'closed' ? '已解决' : (m.status === 'cancelled' ? '已取消' : '办理中');
+  if (key === 'status') return m.status === 'closed' ? '已解决' : (m.status === 'cancelled' ? '已取消' : (isPendingConfirm(m) ? '待确认' : '办理中'));
   if (key === 'src') return proposalTypeText(m) || '';
   if (key === 'tags') return (m.tags || []).join('、');
   if (key === 'handler') return isEnded(m) ? '' : (activeHandlerNames(m) || '');
@@ -424,17 +455,21 @@ function wbListHtml() {
   const me = curUser();
   const list = wbList();
   if (!list.length) return empty('暂无符合条件的消息');
-  /* PC 端表格、手机端同款卡片，由 CSS 断点二选一显示 */
+  /* PC 端表格、手机端同款卡片，由 CSS 断点二选一显示；眼睛只在广场栏目出现 */
+  const inSquareTab = effectiveWbTab() === 'square';
   return '<div class="wb-pc">' + wbTableHtml(list, me) + '</div>' +
-    '<div class="wb-mb">' + list.map((m) => messageListCardHtml(m, me)).join('') + '</div>';
+    '<div class="wb-mb">' + list.map((m) => messageListCardHtml(m, me, inSquareTab)).join('') + '</div>';
 }
 
 function renderWorkbench() {
   const me = curUser();
   const tab = effectiveWbTab();
   /* 池筛选与池管理页的「目标池」口径一致：只列一级业务池，选中即连带其下部门/小组 */
-  const canViewAllPools = isDispatcher(me) || isExecutive(me);
+  const canViewAllPools = isDispatcher(me) || isExecutive(me) || isExecRole(me);
   if (!canViewAllPools) wbPool = 'all';
+  /* 「设为公开」这项筛选只给李倩影和各池负责人看，用来核哪些条已经进广场；纯发起人不展示 */
+  const canFilterPublic = canAccessPoolManage(me);
+  if (wbTag === WB_PUBLIC_TAG && !canFilterPublic) wbTag = '';
   const visiblePoolIds = new Set(visibleMessages().flatMap((m) =>
     bizPools().filter((p) => msgInPool(m, p.id)).map((p) => p.id)));
   const availablePools = bizPools().filter((p) => canViewAllPools || visiblePoolIds.has(p.id));
@@ -444,8 +479,14 @@ function renderWorkbench() {
   const poolFilterHtml = canViewAllPools ? '<select onchange="setWbPool(this.value)">' + poolOpts + '</select>' : '';
   const tagNames = [...new Set(MESSAGE_TAGS.concat(S.messages.flatMap((m) => m.tags || [])))];
   const tagOpts = '<option value="">全部标签</option>' + tagNames.map((tag) =>
-    '<option value="' + esc(tag) + '"' + (wbTag === tag ? ' selected' : '') + '>' + esc(tag) + '</option>').join('');
-  /* 广场与其他工作台栏目共用表格/移动卡片，只将数据限定为已解决消息。 */
+    '<option value="' + esc(tag) + '"' + (wbTag === tag ? ' selected' : '') + '>' + esc(tag) + '</option>').join('') +
+    (canFilterPublic ? '<option value="' + WB_PUBLIC_TAG + '"' +
+      (wbTag === WB_PUBLIC_TAG ? ' selected' : '') + '>设为公开</option>' : '');
+  /* 提议类型与填报口径一致：4 个固定类型，数据里出现过的其他类型一并列出 */
+  const sourceNames = [...new Set(SOURCE_OPTIONS.concat(S.messages.flatMap((m) => proposalTypes(m))))];
+  const sourceOpts = '<option value="">全部类型</option>' + sourceNames.map((s) =>
+    '<option value="' + esc(s) + '"' + (wbSource === s ? ' selected' : '') + '>' + esc(s) + '</option>').join('');
+  /* 广场与其他工作台栏目共用表格/移动卡片，只将数据限定为进广场的消息（见 inSquare）。 */
   const listHtml = wbListHtml();
   return '<div class="wb-main">' +
     '<div class="wb-tabs-row">' +
@@ -456,8 +497,9 @@ function renderWorkbench() {
     (canAccessPoolManage(me) ? '<button type="button" class="btn btn-sm wb-export-btn" onclick="exportWbMessages()">导出</button>' : '') +
     '</div>' +
     '<div class="filters">' +
-      '<input placeholder="搜索编号 / 关键字" value="' + esc(wbKw) + '" oninput="setWbKw(this.value)">' +
+      '<input placeholder="搜索任意关键字" value="' + esc(wbKw) + '" oninput="setWbKw(this.value)">' +
       poolFilterHtml +
+      '<select onchange="setWbSource(this.value)">' + sourceOpts + '</select>' +
       '<select onchange="setWbTag(this.value)">' + tagOpts + '</select>' +
     '</div>' +
     '<div id="msgList">' + listHtml + '</div>' +
@@ -754,7 +796,6 @@ function ipListHtml() {
         '<span class="badge b-p_exec" style="max-width:260px; overflow:hidden; text-overflow:ellipsis;" title="当前归属池：' + esc(poolTag) + '">归属池：' + esc(poolTag) + '</span>' +
         (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handlers || '—') + '</span>') +
       '</div>' +
-      '<div class="msg-title" style="font-size:14px; font-weight:600; color:#1f2430; margin:2px 0;">' + esc(m.title) + '</div>' +
       (src ? '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src) + '</div>' : '') +
       (m.customerName ? '<div class="msg-info"><span class="msg-info-label">关联客户：</span><b style="color:#2f6bff;">' + esc(m.customerName) + '</b></div>' : '') +
       '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
@@ -782,7 +823,6 @@ function renderInfoPool(sourceList) {
         '<span class="square-author"><b>' + esc(author.name || '系统') + '</b><small>' + esc(author.dept || '') + '</small></span>' +
         '<time>' + fmtTime(m.updatedAt) + '</time>' +
       '</div>' +
-      '<h2>' + esc(m.title) + '</h2>' +
       '<p class="square-copy">' + esc(m.content) + '</p>' +
       (topicTags.length ? '<div class="square-topics">' + topicTags.map((tag) => '<span>' + esc(tag) + '</span>').join('') + '</div>' : '') +
       '<div class="square-actions">' +
@@ -805,7 +845,7 @@ function renderInfoPool(sourceList) {
  * ========================================================================== */
 let newMsgAtts = [];
 let editReplyAtts = [];
-let newSources = ['其他'];
+let newSource = '其他';
 let newTargetPool = 'p_other';
 let newDraft = { content: '', customerName: '', sourceOther: '' };
 let newCustomerQuery = '';
@@ -832,16 +872,16 @@ function renderAttChips() {
     '<span class="att-chip">' + esc(a.name) + '（' + fmtSize(a.size) + '）<b onclick="delNewAtt(' + i + ')">×</b></span>').join('');
 }
 
-window.toggleNewSource = (source) => {
+/* 提议类型单选：点中的即唯一类型，再点别的直接换过去 */
+window.selectNewSource = (source) => {
   captureNewDraft();
-  const i = newSources.indexOf(source);
-  if (i > -1) newSources.splice(i, 1); else newSources.push(source);
+  newSource = source;
   render();
 };
 function renderNewSources() {
   const el = document.getElementById('newSourceChips');
   if (el) el.innerHTML = SOURCE_OPTIONS.map((s) =>
-    '<span class="chip' + (newSources.includes(s) ? ' on' : '') + '" onclick="toggleNewSource(\'' + s + '\')">' + esc(s) + '</span>').join('');
+    '<span class="chip' + (newSource === s ? ' on' : '') + '" onclick="selectNewSource(\'' + s + '\')">' + esc(s) + '</span>').join('');
 }
 
 /* 投递目标：8 个业务池之一，进池即直投该池负责人+秘书，李倩影同步跟进 */
@@ -926,19 +966,18 @@ window.toggleNewVoice = () => {
 window.submitNew = () => {
   captureNewDraft();
   const content = newDraft.content.trim();
-  if (!newSources.length) { toast('请选择提议类型'); return; }
   if (!content) { toast('请填写问题描述'); return; }
   if (!newTargetPool) { toast('请选择 1 个投递目标池'); return; }
   const m = createMessage({
     poolId: newTargetPool, content,
-    sources: newSources.slice(),
-    customerName: newSources.includes('客需') ? newDraft.customerName : '',
-    sourceOther: newSources.includes('其他') ? newDraft.sourceOther.trim() : '',
+    sources: [newSource],
+    customerName: newSource === '客需' ? newDraft.customerName : '',
+    sourceOther: newSource === '其他' ? newDraft.sourceOther.trim() : '',
     attachments: newMsgAtts.slice()
   });
   if (!m || m.ok === false) { toast(m.msg || '提交失败'); return; }
   newMsgAtts = [];
-  newSources = ['其他'];
+  newSource = '其他';
   newTargetPool = 'p_other';
   newDraft = { content: '', customerName: '', sourceOther: '' };
   newCustomerQuery = '';
@@ -948,7 +987,7 @@ window.submitNew = () => {
 };
 
 function renderNew() {
-  const needCustomer = newSources.includes('客需');
+  const needCustomer = newSource === '客需';
   return '<div class="card" style="max-width:720px;margin:0 auto 14px">' +
     '<div class="form-row"><div class="form-label">提议类型<span class="req">*</span></div>' +
       '<div class="chip-group" id="newSourceChips"></div></div>' +
@@ -1033,8 +1072,17 @@ window.applyMessageTag = (msgId, tag) => {
   if (!m) return;
   const r = toggleMessageTag(msgId, tag);
   if (!r.ok) { toast(r.msg); return; }
-  closeModal();
+  /* 弹窗保持打开：选中的底色就地亮起，再点一次取消时回到初始颜色（点遮罩关闭） */
+  renderModal();
   toast(r.active ? '已添加“' + tag + '”标签' : '已取消“' + tag + '”标签');
+  render();
+};
+
+window.applyMessagePublic = (msgId) => {
+  const r = toggleMessagePublic(msgId);
+  if (!r.ok) { toast(r.msg); return; }
+  renderModal();
+  toast(r.active ? '已设为公开，该条信息进入广场' : '已取消公开');
   render();
 };
 
@@ -1233,7 +1281,7 @@ function orgPickerGroups() {
   return groups;
 }
 
-/* 复用「添加池成员」同款组织架构选择形态：部门分组复选框、本池成员置顶为首组，
+/* 组织架构选人弹窗：部门分组复选框、本池成员置顶为首组，
  * 弹窗打开即可直接勾到本池对应的人选 */
 function renderOrgPicker() {
   if (!orgPicker) return;
@@ -1669,14 +1717,22 @@ function renderModal() {
 
   /* 标记为：只处理业务标签；状态通过操作栏的独立按钮处理。 */
   if (modalState.mode === 'tag') {
-    const rows = MESSAGE_TAGS;
+    const picked = m.tags || [];
+    const rows = MESSAGE_TAGS.map((tag) =>
+      '<button type="button" class="tag-choice' + (picked.includes(tag) ? ' on' : '') + '"' +
+        ' onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +
+        '<span>' + esc(tag) + '</span>' +
+      '</button>');
+    /* 「设为公开」只给李倩影：点下去这条就进广场 */
+    if (isDispatcher(curUser())) {
+      rows.push('<button type="button" class="tag-choice' + (m.isPublic ? ' on' : '') + '"' +
+        ' onclick="applyMessagePublic(\'' + m.id + '\')">' +
+        '<span>设为公开</span>' + (m.isPublic ? '<small>已进广场</small>' : '') +
+      '</button>');
+    }
     document.getElementById('modal').innerHTML =
       '<div class="tag-modal-head"><b>标记为</b><span>业务标签</span></div>' +
-      '<div class="tag-choice-list">' + rows.map((tag) =>
-        '<button type="button" class="tag-choice"' +
-          ' onclick="applyMessageTag(\'' + m.id + '\',\'' + tag + '\')">' +
-          '<span>' + esc(tag) + '</span>' +
-        '</button>').join('') + '</div>';
+      '<div class="tag-choice-list">' + rows.join('') + '</div>';
     return;
   }
 
@@ -1957,7 +2013,10 @@ window.detailSearchKeydown = (event) => {
 /* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它直接进那条回复的编辑弹窗 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
-  const comment = !isEnded(m) ? '<div class="bar-comment">' +
+  /* 发起人不在底栏补充，入口改到卡片「详细描述」右侧的「我要补充」；
+   * 高管只浏览不发言，底栏同样不给输入框（他若兼任池负责人或是本人在办的处理人则照常） */
+  const silent = isReadOnlyExec(me, m);
+  const comment = !isEnded(m) && !isRequesterView(me, m) && !silent ? '<div class="bar-comment">' +
     '<input class="bar-comment-input" readonly placeholder="说点什么..." onclick="openCommentPanel(\'' + m.id + '\')">' +
   '</div>' : '';
   const acts = [];
@@ -2093,28 +2152,20 @@ function pickCommentPool(m, me) {
 
 /* ---------- 评论流卡片列表 ---------- */
 function replyDeadlineHint(m) {
-  const replies = repliesOf(m.id);
-  const activeLinks = linksOf(m.id).filter(linkActive).sort((a, b) => (b.dispatchedAt || 0) - (a.dispatchedAt || 0));
-  const basis = replies.length
-    ? replies[0]
-    : (activeLinks[0] ? { at: activeLinks[0].dispatchedAt || m.createdAt, poolId: activeLinks[0].poolId } : null);
-  if (!basis) return '';
-  const deadline = replyEditDeadline(basis);
-  if (!deadline) return '';
-  const ended = m.status === 'closed' || m.status === 'cancelled' || Date.now() >= deadline;
-  const when = m.closedAt && m.closedAt < deadline ? m.closedAt : deadline;
-  return (ended ? '回复已于 ' : '回复将于 ') + fmtMonthTime(when) + ' 关闭';
+  const deadline = messageHandleDeadline(m);
+  if (!deadline || Date.now() >= deadline) return '';
+  return '回复将于 ' + fmtMonthTime(deadline) + ' 关闭';
 }
 
 function commentAreaHtml(me, m) {
   const threads = visibleThreads(me, m);
-  const isFull = isAdmin(me) || isDispatcher(me);
+  const isFull = isAdmin(me) || isDispatcher(me) || isExecRole(me);
   /* 发起人看不到处理人的中间回复，无可见回复时整张卡片不展示 */
   if (!threads.list.length && me.id === m.createdBy) return '';
   const isHandler = !isFull && isHandlerOf(me, m);
   const sub = (isFull || isHandler)
     ? threads.list.length + ' 条 · 按回复时间排序'
-    : '我可见的 ' + threads.list.length + ' 条回复 · 他人中间回复仅李倩影可见';
+    : '';
   /* 标题与全部回复合入同一张卡片，回复线程之间用细线分隔 */
   return '<div class="card"><div class="card-title">回复<span class="sub">' + sub + '</span></div>' +
     (threads.list.length
@@ -2132,20 +2183,7 @@ window.toggleMsgLikeUI = (msgId) => {
 /* ---------- 底部弹出评论输入面板（小红书式） ---------- */
 let cmtPanel = null;
 
-/* 当前消息相关人员，发起人置顶 */
-function mentionCandidates(m) {
-  const ids = [];
-  if (m.createdBy) ids.push(m.createdBy);
-  linksOf(m.id).forEach((l) => {
-    recipientsOf(l).forEach((uid) => ids.push(uid));
-    ccOf(l).forEach((uid) => ids.push(uid));
-    if (l.dispatchedBy) ids.push(l.dispatchedBy);
-  });
-  visibleReplies(curUser(), m).forEach((r) => ids.push(r.authorId));
-  return [...new Set(ids)];
-}
-
-/* 发起人补充的说明按顺序另起一行接在详细描述后面（.content-box 是 pre-wrap） */
+/* 历史数据里另起一行的 supplements：仍拼在详细描述后面展示，发起人下次编辑时会合并进正文 */
 function fullContentText(m) {
   return (m.content || '') + (m.supplements || []).map((s) => '\n' + s.content).join('');
 }
@@ -2157,13 +2195,15 @@ window.openCommentPanel = (msgId) => {
     toast('消息已解决，回复已关闭');
     return;
   }
+  const requester = isRequesterView(curUser(), m);
   const joint = repliesOf(m.id)[0];
-  if (joint && !isRequesterView(curUser(), m)) {
-    /* 一条消息一条联合回复：已有回复时这个入口直接进编辑弹窗，能不能编辑由 openEditReplyModal 判定 */
+  if (joint && !requester) {
+    /* 一条消息一条联合回复：已有回复时这个入口直接进那条回复的编辑弹窗，能不能编辑由 openEditReplyModal 判定 */
     openEditReplyModal(msgId, joint.id);
     return;
   }
-  cmtPanel = { msgId, content: '', atts: [], recording: false, showAt: false, atKw: '', showImg: false };
+  /* 发起人这个入口是改自己的详细描述：把原文带出来，光标落到末尾 */
+  cmtPanel = { msgId, content: requester ? fullContentText(m) : '', atts: [], recording: false, showImg: false };
   document.getElementById('cmtMask').classList.add('show');
   document.getElementById('cmtPanel').classList.add('show');
   renderCommentPanel();
@@ -2180,32 +2220,12 @@ function restoreCmtFocus() {
   const t = document.getElementById('cmtText');
   if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
 }
-function restoreAtKwFocus() {
-  const t = document.getElementById('cmtAtKw');
-  if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
-}
 function renderCommentPanel() {
   if (!cmtPanel) return;
   const m = findMsg(cmtPanel.msgId);
   const chips = cmtPanel.atts.map((a, i) =>
     '<span class="att-chip">' + (a.type === 'voice' ? '[语音] ' : a.type === 'image' ? '[图片] ' : '') + esc(a.name) +
     '<b onclick="cmtDelAtt(' + i + ')">×</b></span>').join('');
-  let atBlock = '';
-  if (cmtPanel.showAt) {
-    const kw = (cmtPanel.atKw || '').trim().toLowerCase();
-    const cand = mentionCandidates(m).filter((id) => !kw || userName(id).toLowerCase().includes(kw));
-    atBlock = '<div class="at-list">' +
-      '<input id="cmtAtKw" class="at-kw" placeholder="搜索人员" value="' + esc(cmtPanel.atKw) + '" oninput="cmtAtKw(this.value)">' +
-      (cand.length ? cand.map((id) => {
-        const u = userById(id) || {};
-        return '<div class="at-row" onclick="cmtPickAt(\'' + id + '\')">' +
-          '<span class="mt-avatar">' + esc((userName(id) || '?').slice(0, 1)) + '</span>' +
-          '<span class="at-name">' + esc(userName(id)) + '</span>' +
-          (id === m.createdBy ? '<span class="at-tag">发起人</span>' : '<span class="at-role">' + esc(ROLES[u.role] || '') + '</span>') +
-        '</div>';
-      }).join('') : '<div class="lock-tip">无匹配人员</div>') +
-    '</div>';
-  }
   let imgBlock = '';
   if (cmtPanel.showImg) {
     imgBlock = '<div class="img-pick">' +
@@ -2215,18 +2235,17 @@ function renderCommentPanel() {
   }
   document.getElementById('cmtPanel').innerHTML =
     '<div class="cmt-panel-head">' +
-      '<span class="cmt-panel-title">' + (isRequesterView(curUser(), m) ? '补充说明 ' : '评论 ') + esc(m.no) + '</span>' +
+      '<span class="cmt-panel-title">' + (isRequesterView(curUser(), m) ? '请补充... ' : '评论 ') + esc(m.no) + '</span>' +
       '<span class="cmt-panel-x" onclick="closeCommentPanel()">×</span>' +
     '</div>' +
     '<textarea id="cmtText" placeholder="说点什么..." oninput="cmtPanel.content=this.value">' + esc(cmtPanel.content) + '</textarea>' +
     (chips ? '<div class="att-chips">' + chips + '</div>' : '') +
     (cmtPanel.recording ? '<div class="rec-tip">● 录音中… 再点一次话筒结束并插入语音</div>' : '') +
-    atBlock +
     imgBlock +
     '<div class="cmt-toolbar">' +
       '<button type="button" class="tl-btn' + (cmtPanel.recording ? ' on' : '') + '" title="语音" onclick="cmtVoice()">语音</button>' +
       '<button type="button" class="tl-btn' + (cmtPanel.showImg ? ' on' : '') + '" title="图片" onclick="cmtImage()">图片</button>' +
-      '<button type="button" class="tl-btn' + (cmtPanel.showAt ? ' on' : '') + '" title="提到" onclick="cmtToggleAt()">@</button>' +
+      '<button type="button" class="tl-btn" title="上传文件" onclick="cmtFile()">文件</button>' +
       '<button type="button" class="btn cmt-submit" onclick="submitCommentPanel()">提交</button>' +
     '</div>';
 }
@@ -2254,16 +2273,20 @@ window.cmtImagePick = (capture) => {
   };
   inp.click();
 };
-window.cmtToggleAt = () => { if (!cmtPanel) return; cmtPanel.showAt = !cmtPanel.showAt; cmtPanel.atKw = ''; renderCommentPanel(); };
-window.cmtAtKw = (v) => { if (!cmtPanel) return; cmtPanel.atKw = v; renderCommentPanel(); restoreAtKwFocus(); };
-window.cmtPickAt = (id) => {
+window.cmtFile = () => {
   if (!cmtPanel) return;
-  cmtPanel.content = (cmtPanel.content ? cmtPanel.content.replace(/\s+$/, '') + ' ' : '') + '@' + userName(id) + ' ';
-  cmtPanel.showAt = false; cmtPanel.atKw = '';
-  renderCommentPanel(); restoreCmtFocus();
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.multiple = true;
+  inp.onchange = () => {
+    if (!cmtPanel) return;
+    [...inp.files].forEach((f) => cmtPanel.atts.push({ name: f.name, size: f.size }));
+    renderCommentPanel(); restoreCmtFocus();
+  };
+  inp.click();
 };
 
-/* 提交：发起人这个输入框是「补充说明」，走 appendSupplement；其他人仍是联合回复 */
+/* 提交：发起人这个输入框是「带原文改详细描述」，走 updateMessageContent；其他人仍是联合回复 */
 window.submitCommentPanel = () => {
   if (!cmtPanel) return;
   const st = cmtPanel;
@@ -2271,10 +2294,10 @@ window.submitCommentPanel = () => {
   const me = curUser();
   const m = findMsg(st.msgId);
   if (isRequesterView(me, m)) {
-    const r = appendSupplement(st.msgId, content, st.atts);
+    const r = updateMessageContent(st.msgId, content, st.atts);
     if (!r.ok) { toast(r.msg); return; }
     closeCommentPanel();
-    toast('已补充');
+    toast('已修改');
     render();
     return;
   }
@@ -2364,6 +2387,8 @@ function renderDetail(id) {
   if (!canSeeMessage(me, m)) {
     return toolbar + '<div class="card no-perm">您无权查看该消息<br>仅发起人、总池分发人李倩影及被分发到的处理人可查看</div>';
   }
+  /* 广场里的信息被打开即计一次浏览，卡片上的眼睛随之更新 */
+  if (inSquare(m)) recordMessageView(m.id);
   const links = linksOf(m.id);
   const srcPool = poolById(m.sourcePoolId);
 
@@ -2375,7 +2400,6 @@ function renderDetail(id) {
       '<span class="detail-no">' + m.no + '</span>' + cardStatusBadgeHtml(m) + messageTagsHtml(m) +
       (m.closedAt ? '<span class="msg-meta">关闭于 ' + fmtTime(m.closedAt) + '</span>' : '') +
     '</div>' +
-    '<h2>' + esc(m.title) + '</h2>' +
     '<div class="detail-meta">' +
       '<span>提出人：' + esc(userName(m.createdBy)) + '（' + esc((userById(m.createdBy) || {}).dept || '') + '）</span>' +
       '<span>投递：' + esc(srcPool ? srcPool.name : '—') + '池</span>' +
@@ -2430,18 +2454,8 @@ var pmState = {
 };
 window.pmState = pmState;
 
-const REPLY_CLOSE_WEEKDAYS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-function pmReplyCloseWeekday(pool) {
-  const weekday = Number(pool && pool.replyCloseWeekday != null ? pool.replyCloseWeekday : 5);
-  return weekday >= 0 && weekday <= 6 ? weekday : 5;
-}
 function pmReplyCloseTime(pool) {
   return pool && /^\d{2}:\d{2}$/.test(pool.replyCloseTime || '') ? pool.replyCloseTime : '18:00';
-}
-function pmReplyCloseOptions(pool) {
-  const current = pmReplyCloseWeekday(pool);
-  return REPLY_CLOSE_WEEKDAYS.map((label, value) =>
-    '<option value="' + value + '"' + (value === current ? ' selected' : '') + '>' + label + '</option>').join('');
 }
 
 function pmGetLevelName(level) {
@@ -2449,11 +2463,6 @@ function pmGetLevelName(level) {
   if (level === 1) return '部门池';
   if (level === 2) return '小组池';
   return '池节点';
-}
-
-function pmGetLevelTag(level) {
-  const name = pmGetLevelName(level);
-  return '<span class="pm-node-level-tag pm-level-' + (level != null ? level : 1) + '">' + name + '</span>';
 }
 
 function pmFormatOwner(pool) {
@@ -2474,7 +2483,6 @@ function pmRenderNodeHtml(pool) {
   const hasOverdue = metrics.hasOverdue;
 
   // 身份与层级判断
-  const levelTag = pmGetLevelTag(pool.level);
   const ownerHtml = pmFormatOwner(pool);
   const countClass = 'pm-count-pill' + (hasOverdue ? ' has-overdue' : '');
 
@@ -2483,7 +2491,6 @@ function pmRenderNodeHtml(pool) {
   html += '<span class="pm-node-dot"></span>';
   html += '<div class="pm-node-main">';
   html += '<span class="pm-node-title" title="' + esc(pool.name) + '">' + esc(pool.name) + '</span>';
-  html += levelTag;
   html += ownerHtml;
   html += '</div>'; // .pm-node-main
   html += '<div class="pm-node-right">';
@@ -2504,14 +2511,12 @@ function pmRenderDetailHtml(pool, me) {
 
   const canEdit = canEditPoolSettings(me, pool);
   const canSetOwner = canSetPoolOwner(me, pool);
-  const canManageMembers = canManagePoolMembers(me, pool);
 
   let html = '<div class="card pm-detail-card" style="padding: 18px 20px;">';
   // 卡片顶栏
   html += '<div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; padding-bottom: 12px; border-bottom: 1px solid #f0f2f7;">';
   html += '<div style="display: flex; align-items: center; gap: 8px;">';
   html += '<span style="font-size: 18px; font-weight: 700; color: #1f2430;">' + esc(pool.name) + '</span>';
-  html += pmGetLevelTag(pool.level);
   if (pool.status === 'DISABLED') {
     html += '<span class="badge b-cancelled">已停用</span>';
   }
@@ -2542,8 +2547,8 @@ function pmRenderDetailHtml(pool, me) {
   html += '<div class="pm-meta-item"><div class="lbl">秘书</div><div class="val">' + (secIds.length ? esc(secIds.map(userName).join('、')) : '—') + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">成员规模</div><div class="val">' + memberList.length + ' 人</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">办结时限</div><div class="val">' + (pool.timeoutDays || 2) + ' 天</div></div>';
-  html += '<div class="pm-meta-item"><div class="lbl">回复编辑关闭</div><div class="val">' +
-    REPLY_CLOSE_WEEKDAYS[pmReplyCloseWeekday(pool)] + ' ' + pmReplyCloseTime(pool) + '</div></div>';
+  html += '<div class="pm-meta-item"><div class="lbl">回复关闭时间</div><div class="val">' +
+    pmReplyCloseTime(pool) + '</div></div>';
   html += '<div class="pm-meta-item"><div class="lbl">管辖层级</div><div class="val">' + pmGetLevelName(pool.level) + '</div></div>';
   html += '</div>'; // .pm-detail-meta-grid
 
@@ -2563,9 +2568,6 @@ function pmRenderDetailHtml(pool, me) {
     html += '<div style="display: flex; gap: 8px;">';
     if (canSetOwner) {
       html += '<button type="button" class="btn btn-sm btn-ghost" onclick="pmOpenSetOwner(\'' + pool.id + '\')">配置共同负责人</button>';
-    }
-    if (canManageMembers) {
-      html += '<button type="button" class="btn btn-sm btn-primary" onclick="pmOpenAddMember(\'' + pool.id + '\')">+ 添加成员</button>';
     }
     html += '</div>';
     html += '</div>';
@@ -2595,9 +2597,6 @@ function pmRenderDetailHtml(pool, me) {
             html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px; color: #2f6bff; border-color: #b2ddff; background: #eff8ff;" onclick="pmPromoteOwnerDirect(\'' + pool.id + '\', \'' + u.id + '\')" title="增设为共同负责人">+ 设为负责人</button>';
           }
         }
-        if (canManageMembers && (!isOwner || pool.ownerIds.length > 1)) {
-          html += '<button type="button" class="btn btn-sm btn-ghost" style="height: 24px; padding: 0 8px; font-size: 11px; color: #d92d20;" onclick="pmRemoveMember(\'' + pool.id + '\', \'' + u.id + '\')">移出</button>';
-        }
         html += '</div>';
         html += '</div>'; // .pm-member-row
       });
@@ -2618,14 +2617,10 @@ function pmRenderDetailHtml(pool, me) {
     html += '<div class="form-row"><div class="form-label">办结时限要求 (天)</div>' +
       '<input type="number" id="inlinePoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" ' + (!canEdit ? 'disabled' : '') + '></div>';
 
-    html += '<div class="pm-reply-rule-grid">' +
-      '<div class="form-row"><div class="form-label">联合回复关闭日</div>' +
-        '<select id="inlineReplyCloseWeekday" ' + (!canEdit ? 'disabled' : '') + '>' + pmReplyCloseOptions(pool) + '</select></div>' +
-      '<div class="form-row"><div class="form-label">关闭时间</div>' +
-        '<input type="time" id="inlineReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" ' + (!canEdit ? 'disabled' : '') + '></div>' +
-    '</div>';
+    html += '<div class="form-row"><div class="form-label">回复关闭时间</div>' +
+      '<input type="time" id="inlineReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" ' + (!canEdit ? 'disabled' : '') + '></div>';
 
-    html += '<div class="form-hint">同一分发链路的多人共享一条回复；任一成员提交或编辑即视为联合回复，到最近一次配置的关闭时刻后自动锁定。子级池默认继承业务池规则。</div>';
+    html += '<div class="form-hint">同一分发链路的多人共享一条回复；从投递起算满办结时限的当天到关闭时间，该条信息自动关闭并转「待确认」，由李倩影确认是否已解决。子级池默认继承业务池规则。</div>';
 
     if (canEdit) {
       html += '<div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px;">' +
@@ -2667,7 +2662,6 @@ function pmRenderModalHtml(me) {
   // 1. 操作菜单 ActionSheet 弹窗
   if (m.type === 'menu' && pool) {
     const canSetOwner = canSetPoolOwner(me, pool);
-    const canManageMem = canManagePoolMembers(me, pool);
     const canEdit = canEditPoolSettings(me, pool);
     const canDisable = canDisablePool(me, pool);
 
@@ -2680,7 +2674,6 @@ function pmRenderModalHtml(me) {
         '<div class="pm-modal-body">' +
           '<div class="pm-sheet-menu">' +
             (canSetOwner ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSetOwner(\'' + pool.id + '\');">共同负责人</button>' : '') +
-            (canManageMem ? '<button type="button" class="pm-sheet-item" onclick="pmOpenAddMember(\'' + pool.id + '\');">池成员</button>' : '') +
             (canEdit ? '<button type="button" class="pm-sheet-item" onclick="pmOpenSettings(\'' + pool.id + '\');">规则设置</button>' : '') +
             (canDisable ? '<button type="button" class="pm-sheet-item danger" onclick="pmToggleDisablePool(\'' + pool.id + '\');">' + (pool.status === 'DISABLED' ? '启用本池' : '停用本池') + '</button>' : '') +
           '</div>' +
@@ -2707,11 +2700,8 @@ function pmRenderModalHtml(me) {
               '<label>办理时限（天）</label>' +
               '<input type="number" id="editPoolTimeout" value="' + (pool.timeoutDays || 2) + '" min="1" max="30" />' +
             '</div>' +
-            '<div class="pm-reply-rule-grid">' +
-              '<div class="pm-form-row"><label>联合回复关闭日</label><select id="editReplyCloseWeekday">' + pmReplyCloseOptions(pool) + '</select></div>' +
-              '<div class="pm-form-row"><label>关闭时间</label><input type="time" id="editReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" /></div>' +
-            '</div>' +
-            '<div class="hint">多人共享一条联合回复，到配置时刻后自动关闭编辑；子级池默认继承业务池规则。</div>' +
+            '<div class="pm-form-row"><label>回复关闭时间</label><input type="time" id="editReplyCloseTime" value="' + pmReplyCloseTime(pool) + '" /></div>' +
+            '<div class="hint">多人共享一条联合回复；从投递起算满办结时限的当天到关闭时间，该条信息自动关闭并转「待确认」。子级池默认继承业务池规则。</div>' +
           '</div>' +
           '<div class="pm-modal-foot">' +
             '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
@@ -2743,7 +2733,6 @@ function pmRenderModalHtml(me) {
             '<div class="pm-multi-select-list">' +
               USERS.map((u) => {
                 const isChecked = curOwners.has(u.id);
-                const isMember = (pool.memberIds || []).includes(u.id);
                 return '<label class="pm-multi-select-item' + (isChecked ? ' checked' : '') + '">' +
                   '<input type="checkbox" name="poolOwnerSelect" value="' + u.id + '"' + (isChecked ? ' checked' : '') + ' onchange="this.closest(\'.pm-multi-select-item\').classList.toggle(\'checked\', this.checked); pmUpdateOwnerSelectCount();" />' +
                   '<span class="pm-member-avatar' + (isChecked ? ' is-owner' : '') + '">' + esc(u.name.slice(0, 1)) + '</span>' +
@@ -2751,9 +2740,6 @@ function pmRenderModalHtml(me) {
                     '<span class="pm-ms-name">' + esc(u.name) + '</span>' +
                     '<span class="pm-ms-dept">' + esc(u.dept || u.role) + '</span>' +
                   '</div>' +
-                  '<span class="pm-ms-tag' + (isChecked ? ' owner' : (isMember ? ' member' : '')) + '">' +
-                    (isChecked ? '已是负责人' : (isMember ? '本池成员' : '组织员工')) +
-                  '</span>' +
                 '</label>';
               }).join('') +
             '</div>' +
@@ -2761,53 +2747,6 @@ function pmRenderModalHtml(me) {
           '<div class="pm-modal-foot">' +
             '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
             '<button type="submit" class="btn btn-primary">保存负责人配置</button>' +
-          '</div>' +
-        '</form>' +
-      '</div>' +
-    '</div>';
-  }
-
-  // 4. 添加成员弹窗
-  if (m.type === 'addMember' && pool) {
-    const existing = new Set(pool.memberIds || []);
-    const candidates = USERS.filter((u) => !existing.has(u.id));
-    const deptGroups = [];
-    candidates.forEach((u) => {
-      const dept = u.dept || '其他人员';
-      let group = deptGroups.find((item) => item.name === dept);
-      if (!group) { group = { name: dept, users: [] }; deptGroups.push(group); }
-      group.users.push(u);
-    });
-    const orgHtml = deptGroups.map((group, groupIndex) =>
-      '<div class="pm-org-group">' +
-        '<label class="pm-org-dept">' +
-          '<input type="checkbox" data-member-group-head="' + groupIndex + '" onchange="pmToggleMemberDept(' + groupIndex + ', this.checked)" />' +
-          '<span>' + esc(group.name) + '</span><i>' + group.users.length + '人</i>' +
-        '</label>' +
-        '<div class="pm-org-members">' + group.users.map((u) =>
-          '<label class="pm-org-person">' +
-            '<input type="checkbox" name="poolMemberSelect" data-member-group="' + groupIndex + '" value="' + u.id + '" onchange="pmUpdateMemberSelectCount()" />' +
-            '<span class="pm-member-avatar">' + esc(u.name.slice(0, 1)) + '</span>' +
-            '<span class="pm-org-person-info"><b>' + esc(u.name) + '</b><small>' + esc(u.title || u.role) + '</small></span>' +
-          '</label>').join('') +
-        '</div>' +
-      '</div>').join('');
-
-    return '<div class="pm-modal-overlay" onclick="pmCloseModal()">' +
-      '<div class="pm-modal-box" onclick="event.stopPropagation()">' +
-        '<div class="pm-modal-head">' +
-          '<h3>添加池成员 · ' + esc(pool.name) + '</h3>' +
-          '<button type="button" class="pm-modal-close" onclick="pmCloseModal()">✕</button>' +
-        '</div>' +
-        '<form onsubmit="event.preventDefault(); pmSubmitAddMember(\'' + pool.id + '\')">' +
-          '<div class="pm-modal-body">' +
-            '<div class="pm-member-picker-head"><b>按组织架构选择成员</b><span id="pmMemberSelectCount">已选 0 人</span></div>' +
-            '<div class="pm-org-picker">' + (candidates.length ? orgHtml : '<div class="empty">暂无可添加成员</div>') + '</div>' +
-            '<div class="hint pm-share-hint">成员加入后，可共享查看和参与处理进入该池的信息。</div>' +
-          '</div>' +
-          '<div class="pm-modal-foot">' +
-            '<button type="button" class="btn btn-ghost" onclick="pmCloseModal()">取消</button>' +
-            '<button type="submit" class="btn btn-primary"' + (!candidates.length ? ' disabled' : '') + '>添加所选成员</button>' +
           '</div>' +
         '</form>' +
       '</div>' +
@@ -3026,7 +2965,7 @@ function pmRenderTreeManagementHtml(me) {
 
   // 树筛选栏 (统一采用标准 filters 样式)
   html += '<div class="filters" style="margin-bottom: 12px; gap: 8px;">';
-  html += '<input type="text" id="pmSearchInput" placeholder="搜池名称 / 负责人 / 秘书..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px;" />';
+  html += '<input type="text" id="pmSearchInput" placeholder="搜索..." value="' + esc(pmState.keyword || '') + '" oninput="pmSetKeyword(this.value)" style="font-size: 12px;" />';
   html += '</div>';
 
   html += '<div class="pm-tree-body" style="max-height: 640px; overflow-y: auto; padding-right: 2px;">';
@@ -3059,9 +2998,9 @@ function renderPools() {
   // 如果普通员工没有所属管理根节点
   if (!roots.length || !canAccessPoolManage(me)) {
     return '<div class="card empty" style="max-width: 640px; margin: 40px auto; padding: 32px 24px;">' +
-      '<div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1f2430;">您当前身份为普通员工，暂无池管理权限</div>' +
+      '<div style="font-size: 16px; font-weight: 600; margin-bottom: 8px; color: #1f2430;">您当前身份为' + esc(ROLES[me.role] || '员工') + '，暂无池管理权限</div>' +
       '<div style="font-size: 13px; color: #667085; max-width: 480px; margin: 0 auto 20px; line-height: 1.6;">' +
-        '当前身份（<b>' + esc(me.name) + ' · ' + (me.title || ROLES[me.role]) + '</b>）属于基层员工。请在右上角切换为<b>总池分发人、业务池负责人或部门/小组负责人</b>，以体验按职级授权裁剪的组织架构树。' +
+        '当前身份（<b>' + esc(me.name) + ' · ' + (me.title || ROLES[me.role]) + '</b>）不参与池配置。请在右上角切换为<b>总池分发人、业务池负责人或部门/小组负责人</b>，以体验按职级授权裁剪的组织架构树。' +
       '</div>' +
       '<div style="display: flex; gap: 8px; justify-content: center; flex-wrap: wrap;">' +
         '<button type="button" class="btn btn-primary" onclick="changeIdentity(\'u_qy\')">切为 李倩影 · 总池分发人（全部 8 个池）</button>' +
@@ -3167,11 +3106,6 @@ window.pmOpenSetOwner = function(poolId) {
   render();
 };
 
-window.pmOpenAddMember = function(poolId) {
-  pmState.modal = { type: 'addMember', poolId };
-  render();
-};
-
 window.pmOpenUrge = function(messageId, poolId) {
   pmState.modal = { type: 'urge', messageId, poolId };
   render();
@@ -3195,33 +3129,12 @@ window.pmUpdateOwnerSelectCount = function() {
   }
 };
 
-window.pmToggleMemberDept = function(groupIndex, checked) {
-  document.querySelectorAll('input[name="poolMemberSelect"][data-member-group="' + groupIndex + '"]').forEach((cb) => {
-    cb.checked = checked;
-  });
-  pmUpdateMemberSelectCount();
-};
-
-window.pmUpdateMemberSelectCount = function() {
-  const selected = document.querySelectorAll('input[name="poolMemberSelect"]:checked');
-  const countEl = document.getElementById('pmMemberSelectCount');
-  if (countEl) countEl.innerText = '已选 ' + selected.length + ' 人';
-  document.querySelectorAll('[data-member-group-head]').forEach((head) => {
-    const groupIndex = head.getAttribute('data-member-group-head');
-    const children = Array.from(document.querySelectorAll('input[name="poolMemberSelect"][data-member-group="' + groupIndex + '"]'));
-    const checkedCount = children.filter((cb) => cb.checked).length;
-    head.checked = children.length > 0 && checkedCount === children.length;
-    head.indeterminate = checkedCount > 0 && checkedCount < children.length;
-  });
-};
-
 window.pmSubmitSettings = function(poolId) {
   const name = document.getElementById('editPoolName').value;
   const timeoutDays = document.getElementById('editPoolTimeout').value;
-  const replyCloseWeekday = document.getElementById('editReplyCloseWeekday').value;
   const replyCloseTime = document.getElementById('editReplyCloseTime').value;
 
-  const res = updatePool(poolId, { name, timeoutDays, replyCloseWeekday, replyCloseTime });
+  const res = updatePool(poolId, { name, timeoutDays, replyCloseTime });
   if (res.ok) {
     toast('池设置已成功更新');
     pmState.modal = null;
@@ -3232,15 +3145,13 @@ window.pmSubmitSettings = function(poolId) {
 window.pmSubmitInlineSettings = function(poolId) {
   const nameEl = document.getElementById('inlinePoolName');
   const timeoutEl = document.getElementById('inlinePoolTimeout');
-  const replyCloseWeekdayEl = document.getElementById('inlineReplyCloseWeekday');
   const replyCloseTimeEl = document.getElementById('inlineReplyCloseTime');
 
   const name = nameEl ? nameEl.value.trim() : '';
   const timeoutDays = timeoutEl ? timeoutEl.value : 2;
-  const replyCloseWeekday = replyCloseWeekdayEl ? replyCloseWeekdayEl.value : 5;
   const replyCloseTime = replyCloseTimeEl ? replyCloseTimeEl.value : '18:00';
 
-  const res = updatePool(poolId, { name, timeoutDays, replyCloseWeekday, replyCloseTime });
+  const res = updatePool(poolId, { name, timeoutDays, replyCloseTime });
   if (res.ok) {
     toast('已保存池参数配置');
     render();
@@ -3292,23 +3203,6 @@ window.pmDemoteOwnerDirect = function(poolId, userId) {
   }
   removePoolOwner(poolId, userId);
   toast('已取消 ' + userName(userId) + ' 的负责人身份');
-  render();
-};
-
-window.pmSubmitAddMember = function(poolId) {
-  const selected = Array.from(document.querySelectorAll('input[name="poolMemberSelect"]:checked')).map((cb) => cb.value);
-  if (!selected.length) { toast('请至少选择一名成员'); return; }
-  const result = addPoolMembers(poolId, selected);
-  if (!result.ok) { toast(result.msg); return; }
-  toast('已添加 ' + result.count + ' 名池成员，成员可共享查看该池信息');
-  pmState.modal = null;
-  render();
-};
-
-window.pmRemoveMember = function(poolId, userId) {
-  if (!confirm('确定将 ' + userName(userId) + ' 移出该池成员名单吗？')) return;
-  removePoolMember(poolId, userId);
-  toast('已移出成员 ' + userName(userId));
   render();
 };
 

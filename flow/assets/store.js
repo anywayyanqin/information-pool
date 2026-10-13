@@ -149,33 +149,56 @@ function replyCollaboratorNames(r) {
   return [...new Set(ids.filter(Boolean))].map(userName).filter(Boolean);
 }
 
-/* 联合编辑关闭规则按回复所在池向上继承，默认每周五 18:00。
- * 正式环境可由后端配置中心直接下发同结构字段。 */
-function replyEditPolicyFor(r) {
-  let pool = r && r.poolId ? poolById(r.poolId) : null;
-  while (pool) {
-    if (pool.replyCloseWeekday != null || pool.replyCloseTime) {
-      return {
-        weekday: Number(pool.replyCloseWeekday == null ? 5 : pool.replyCloseWeekday),
-        time: /^\d{2}:\d{2}$/.test(pool.replyCloseTime || '') ? pool.replyCloseTime : '18:00'
-      };
-    }
-    pool = pool.parentId ? poolById(pool.parentId) : null;
-  }
-  return { weekday: 5, time: '18:00' };
+/* 办理时限：从投递（或上次退回办理）起算，按在办链路所在池向上继承的「办结时限 N 天」，
+ * 截止落在第 N 天当天池上配置的「关闭时间」时刻。长线任务每有一次回复重开一个周期。 */
+function messageHandlePoolId(m) {
+  const active = linksOf(m.id).filter(linkActive).sort((a, b) => (b.dispatchedAt || 0) - (a.dispatchedAt || 0));
+  return active.length ? active[0].poolId : m.sourcePoolId;
 }
 
+function handleStartAt(m) {
+  if (m.handleResetAt) return m.handleResetAt;
+  if (isLonglineMessage(m)) {
+    const replies = repliesOf(m.id);
+    if (replies.length) {
+      const latest = replies[replies.length - 1];
+      return latest.updatedAt || latest.at;
+    }
+  }
+  return m.createdAt;
+}
+
+function messageHandleDeadline(m) {
+  if (!m || m.status === 'closed' || m.status === 'cancelled') return 0;
+  let pool = poolById(messageHandlePoolId(m));
+  while (pool && !pool.timeoutDays && !pool.replyCloseTime) {
+    pool = pool.parentId ? poolById(pool.parentId) : null;
+  }
+  const days = pool && Number(pool.timeoutDays) > 0 ? Number(pool.timeoutDays) : 2;
+  const time = pool && /^\d{2}:\d{2}$/.test(pool.replyCloseTime || '') ? pool.replyCloseTime : '18:00';
+  const parts = time.split(':').map(Number);
+  const d = new Date(handleStartAt(m) + days * 24 * 3600e3);
+  d.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
+  return d.getTime();
+}
+
+/* 处理人（链路收件人）是否给过回复 */
+function hasHandlerReply(m) {
+  const ids = linksOf(m.id).flatMap((l) => recipientsOf(l));
+  return repliesOf(m.id).some((r) => ids.includes(r.authorId));
+}
+
+/* 有回复且已过办结时限＝该条信息自动关闭，等李倩影确认是否已解决 */
+function isPendingConfirm(m, now) {
+  const deadline = messageHandleDeadline(m);
+  if (!deadline || (now == null ? Date.now() : now) < deadline) return false;
+  return hasHandlerReply(m);
+}
+
+/* 联合回复的编辑截止＝该条信息的办理时限，到点整条锁定 */
 function replyEditDeadline(r) {
-  if (!r || !r.at) return 0;
-  const policy = replyEditPolicyFor(r);
-  const parts = policy.time.split(':').map(Number);
-  const submitted = new Date(r.at);
-  const deadline = new Date(r.at);
-  deadline.setHours(parts[0] || 0, parts[1] || 0, 0, 0);
-  const daysAhead = (policy.weekday - submitted.getDay() + 7) % 7;
-  deadline.setDate(deadline.getDate() + daysAhead);
-  if (deadline.getTime() <= r.at) deadline.setDate(deadline.getDate() + 7);
-  return deadline.getTime();
+  if (!r) return 0;
+  return messageHandleDeadline(findMsg(r.messageId));
 }
 
 function replyEditClosed(r, now) {
@@ -297,6 +320,32 @@ function toggleMessageTag(msgId, tag) {
   addLog(m.id, curUser().id, 'tagged', { note: (i > -1 ? '取消标签：' : '添加标签：') + tag });
   saveState();
   return { ok: true, active: i === -1 };
+}
+
+/* 设为公开：李倩影专属，在办的信息由此进广场；已解决的消息本来就进广场 */
+function toggleMessagePublic(msgId) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!m) return { ok: false, msg: '消息不存在' };
+  if (!isDispatcher(me)) return { ok: false, msg: '仅总池分发人可设置公开' };
+  const active = !m.isPublic;
+  m.isPublic = active;
+  m.updatedAt = Date.now();
+  addLog(m.id, me.id, 'published', { note: me.name + (active ? '将本条信息设为公开' : '取消了本条信息的公开') });
+  saveState();
+  return { ok: true, active };
+}
+
+/* 广场浏览计数：进一次详情算一个人，同一人重复打开不叠加；
+ * 不碰 updatedAt，否则广场按最近更新排序的信息流会被浏览动作打乱 */
+function recordMessageView(msgId) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!me || !m) return;
+  m.viewedBy = Array.isArray(m.viewedBy) ? m.viewedBy : [];
+  if (m.viewedBy.includes(me.id)) return;
+  m.viewedBy.push(me.id);
+  saveState();
 }
 
 /* ---------- 状态机 ----------
@@ -739,20 +788,24 @@ function resolveMessage(msgId) {
   return { ok: true };
 }
 
-/* 把已解决的消息标回未解决：链路重新进入处理中（李倩影与发起人本人） */
+/* 把消息标回未解决：已解决的重新进入处理中；待确认的把办结时限从此刻重算 */
 function reopenMessage(msgId) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
-  if (!canReopenMessage(me, m)) return { ok: false, msg: '只有李倩影或池/部门负责人可以把已解决的消息标为未解决' };
-  if (m.status !== 'closed') return { ok: false, msg: '消息尚未标记已解决' };
+  if (!canReopenMessage(me, m)) return { ok: false, msg: '只有李倩影或池/部门负责人可以把消息标为未解决' };
   const now = Date.now();
-  linksOf(msgId).filter((link) => link.isFinal).forEach((link) => {
-    link.status = 'processing';
-    delete link.resolvedAt;
-  });
-  delete m.closedAt;
-  m.status = linksOf(msgId).length ? 'handling' : 'dispatch';
+  if (m.status === 'closed') {
+    linksOf(msgId).filter((link) => link.isFinal).forEach((link) => {
+      link.status = 'processing';
+      delete link.resolvedAt;
+    });
+    delete m.closedAt;
+    m.status = linksOf(msgId).length ? 'handling' : 'dispatch';
+  } else {
+    if (!isPendingConfirm(m)) return { ok: false, msg: '消息尚未到办结时限' };
+    m.handleResetAt = now;
+  }
   m.updatedAt = now;
   addLog(m.id, me.id, 'reopened', { note: me.name + '标记信息为未解决，重新进入处理' });
   sendWeComNotification(participantIds(m), m.no + ' 已由' + me.name + '标记未解决，请相关处理人继续跟进', m.id, 'assign', me.id);
@@ -793,28 +846,27 @@ function recordSatisfaction(msgId, verdict) {
   return { ok: true, msg: '已记录反馈：' + verdict };
 }
 
-/* ---------- 动作：发起人补充说明 ----------
- * 发起人在详情页底栏输入的不是评论而是对自己消息的补充：
- * 文字另起一行接在详细描述后面，附件并进消息附件，不改状态 */
-function appendSupplement(msgId, text, atts) {
+/* ---------- 动作：发起人修改详细描述 ----------
+ * 底栏输入框对发起人而言是"带着原文改"，不是追加补充：整段写回 m.content，
+ * 此前另起一行的 supplements 已随原文一起带出，写回后合并进正文不再单独存 */
+function updateMessageContent(msgId, text, atts) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
-  if (m.createdBy !== me.id) return { ok: false, msg: '仅发起人可补充说明' };
-  if (m.status === 'cancelled') return { ok: false, msg: '消息已取消，无法补充' };
+  if (m.createdBy !== me.id) return { ok: false, msg: '仅发起人可修改详细描述' };
+  if (m.status === 'cancelled') return { ok: false, msg: '消息已取消，无法修改' };
   const content = (text || '').trim();
   const files = atts || [];
-  if (!content && !files.length) return { ok: false, msg: '请填写补充内容' };
+  if (!content) return { ok: false, msg: '详细描述不能为空' };
+  if (content === fullContentText(m) && !files.length) return { ok: false, msg: '内容未变化' };
   const now = Date.now();
-  if (content) {
-    if (!Array.isArray(m.supplements)) m.supplements = [];
-    m.supplements.push({ by: me.id, at: now, content });
-  }
+  m.content = content;
+  delete m.supplements;
   if (files.length) m.attachments = (m.attachments || []).concat(files);
   m.updatedAt = now;
-  addLog(m.id, me.id, 'supplement', { note: me.name + '补充了说明' });
+  addLog(m.id, me.id, 'content_edit', { note: me.name + '修改了详细描述' });
   saveState();
-  return { ok: true, msg: '已补充' };
+  return { ok: true, msg: '已修改' };
 }
 
 /* ---------- 动作：取消消息（提出人） ---------- */
@@ -1025,10 +1077,6 @@ function updatePool(poolId, patch) {
   }
 
   if (patch.timeoutDays != null) p.timeoutDays = Number(patch.timeoutDays) || 2;
-  if (patch.replyCloseWeekday != null) {
-    const weekday = Number(patch.replyCloseWeekday);
-    p.replyCloseWeekday = weekday >= 0 && weekday <= 6 ? weekday : 5;
-  }
   if (patch.replyCloseTime != null) {
     p.replyCloseTime = /^\d{2}:\d{2}$/.test(patch.replyCloseTime) ? patch.replyCloseTime : '18:00';
   }
@@ -1079,39 +1127,6 @@ function removePoolOwner(poolId, userId) {
   const p = poolById(poolId);
   if (!p) return { ok: false, msg: '池不存在' };
   p.ownerIds = p.ownerIds.filter((id) => id !== userId);
-  saveState();
-  return { ok: true };
-}
-
-function addPoolMember(poolId, userId) {
-  const p = poolById(poolId);
-  if (!p) return { ok: false, msg: '池不存在' };
-  if (!p.memberIds.includes(userId)) {
-    p.memberIds.push(userId);
-    saveState();
-  }
-  return { ok: true };
-}
-
-function addPoolMembers(poolId, userIds) {
-  const p = poolById(poolId);
-  if (!p) return { ok: false, msg: '池不存在', count: 0 };
-  const before = p.memberIds.length;
-  [...new Set((userIds || []).filter(Boolean))].forEach((userId) => {
-    if (!p.memberIds.includes(userId)) p.memberIds.push(userId);
-  });
-  const count = p.memberIds.length - before;
-  if (count) saveState();
-  return { ok: true, count };
-}
-
-function removePoolMember(poolId, userId) {
-  const p = poolById(poolId);
-  if (!p) return { ok: false, msg: '池不存在' };
-  p.memberIds = p.memberIds.filter((id) => id !== userId);
-  if (p.ownerIds.includes(userId)) {
-    p.ownerIds = p.ownerIds.filter((id) => id !== userId);
-  }
   saveState();
   return { ok: true };
 }
