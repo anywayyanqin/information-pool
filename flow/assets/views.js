@@ -34,6 +34,8 @@ function isEnded(m) { return m.status === 'closed' || m.status === 'cancelled'; 
  * 「我发起的」不参与主状态计算，作为附加标签并存。 */
 function flowStatus(m, me) {
   if (isEnded(m)) return 'ended';                                  /* 李倩影已打标「已解决」 */
+  /* 被抄送人：这条对他只是"抄送我的"，进待办等他看过；打开详情即转已办 */
+  if (isCcViewerOnly(me, m)) return (m.ccReadBy || []).includes(me.id) ? 'done' : 'todo';
   const full = isDispatcher(me) || isAdmin(me);
   if (full) {
     /* 李倩影：分发前待分发；有处理人回复即待汇总（待办）；她本人被流转且未回复也是待办；
@@ -47,10 +49,12 @@ function flowStatus(m, me) {
   return 'done';
 }
 /* 卡片与详情头部的状态标签：办理中 → 到办结时限自动关闭转「待确认」→ 李倩影确认后才「已解决」。
- * 待分发/待办/已办只用于工作台标签分区与状态筛选，不再出现在卡片上。 */
-function cardStatusBadgeHtml(m) {
+ * 待分发/待办/已办只用于工作台标签分区与状态筛选，不再出现在卡片上。
+ * 被抄送人不承担办理，办理态一律改显「抄送我的」。 */
+function cardStatusBadgeHtml(m, me) {
   if (m.status === 'closed') return '<span class="badge b-ended">已解决</span>';
   if (m.status === 'cancelled') return '<span class="badge b-cancelled">已取消</span>';
+  if (me && isCcViewerOnly(me, m)) return '<span class="badge b-cc">抄送我的</span>';
   if (isPendingConfirm(m)) return '<span class="badge b-confirm">待确认</span>';
   return '<span class="badge b-handling">办理中</span>';
 }
@@ -356,17 +360,14 @@ function messageListCardHtml(m, me, showViews) {
       '<span class="msg-no">' + esc(m.no) +
         (overdue ? '<span class="msg-overdue">逾期 ' + messageOverdueDays(m) + ' 天</span>' : '') +
       '</span>' +
-      cardStatusBadgeHtml(m) +
+      cardStatusBadgeHtml(m, me) +
       (isEnded(m) ? '' : '<span class="msg-meta msg-handler">当前处理人：' + esc(handler) + '</span>') +
       (showViews ? '<span class="msg-views" title="点进详情即算一次浏览，同一人只计一次">' + VIEWS_ICON + ((m.viewedBy || []).length) + '</span>' : '') +
     '</div>' +
     messageTagLineHtml(m) +
     '<div class="msg-info"><span class="msg-info-label">提议类型：</span>' + esc(src || '—') + '</div>' +
     (deadline ? '<div class="msg-info"><span class="msg-info-label">截止时间：</span><span class="msg-deadline' + (overdue ? ' overdue' : '') + '">' + fmtTime(deadline) + '</span></div>' : '') +
-    '<div class="msg-desc-row"><div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
-      (isRequesterView(me, m) && !isEnded(m)
-        ? '<span class="msg-supplement" onclick="event.stopPropagation();openCommentPanel(\'' + m.id + '\')">我要补充</span>' : '') +
-    '</div>' +
+    '<div class="msg-desc"><span class="msg-info-label">详细描述：</span>' + esc(m.content) + '</div>' +
     '<div class="msg-latest-reply"><span class="msg-info-label">最新回复：</span>' + esc(latestReplyText) + '</div>' +
     '<div class="msg-foot">' +
       '<span class="msg-meta">发起人：' + esc(userName(m.createdBy)) + '</span>' +
@@ -437,7 +438,7 @@ function wbTableHtml(list, me) {
       : '';
     return '<tr onclick="openMessage(\'' + m.id + '\')">' +
       '<td class="t-no">' + esc(m.no) + overdueMeta + '</td>' +
-      '<td>' + cardStatusBadgeHtml(m) + '</td>' +
+      '<td>' + cardStatusBadgeHtml(m, me) + '</td>' +
       '<td>' + esc(src || '—') + '</td>' +
       '<td class="t-tags">' + (messageTagsHtml(m) || '—') + '</td>' +
       '<td>' + esc(isEnded(m) ? '—' : handler) + '</td>' +
@@ -1091,6 +1092,9 @@ window.markMessageResolved = (msgId) => {
   if (!result.ok) { toast(result.msg); return; }
   toast('已标记为已解决');
   render();
+  /* 解决后顺手过一遍「标记为」：打业务标签、确认是否设为公开。
+   * 不选也能直接关掉，事后仍可从底栏「标记为」补标。 */
+  openTagModal(msgId);
 };
 window.markMessageUnresolved = (msgId) => {
   const result = reopenMessage(msgId);
@@ -1414,6 +1418,18 @@ window.confirmModal = () => {
     return;
   }
   const targets = resolveSelTargets();
+  /* 只勾抄送人、没有主办人：不建链路、不进待办，走轻量抄送让对方看得到这条 */
+  if (!targets.length && modalState.mode === 'dispatch') {
+    const ccOnly = orgPickedUserIds('cc').filter((id) => id !== curUser().id);
+    if (ccOnly.length) {
+      const r = shareMessage(modalState.msgId, ccOnly, true);
+      if (!r.ok) { toast(r.msg); return; }
+      closeModal();
+      toast('已抄送给 ' + r.count + ' 人，对方可查看本条消息与回复');
+      render();
+      return;
+    }
+  }
   if (!targets.length) { toast('请至少选择一个节点或人员'); return; }
   const isDsp = modalState.mode === 'dispatch';
   const r = isDsp
@@ -2013,6 +2029,8 @@ window.detailSearchKeydown = (event) => {
 /* ---------- 固定底栏：整条消息一条联合回复，未解决时评论入口常驻；已有人回复时点它直接进那条回复的编辑弹窗 ---------- */
 function actionBarHtml(me, m) {
   if (!canSeeMessage(me, m)) return '';
+  /* 被抄送人只有查看权限：整条底栏不给（无输入框，也没有分发/标记） */
+  if (isCcViewerOnly(me, m)) return '';
   /* 发起人不在底栏补充，入口改到卡片「详细描述」右侧的「我要补充」；
    * 高管只浏览不发言，底栏同样不给输入框（他若兼任池负责人或是本人在办的处理人则照常） */
   const silent = isReadOnlyExec(me, m);
@@ -2389,6 +2407,8 @@ function renderDetail(id) {
   }
   /* 广场里的信息被打开即计一次浏览，卡片上的眼睛随之更新 */
   if (inSquare(m)) recordMessageView(m.id);
+  /* 被抄送人打开详情即算看过，工作台里这条从「待办」转「已办」 */
+  markCcRead(m.id);
   const links = linksOf(m.id);
   const srcPool = poolById(m.sourcePoolId);
 
@@ -2397,7 +2417,7 @@ function renderDetail(id) {
   const ccTargets = dispatchCcText(m);
   const head = '<div class="card detail-head">' +
     '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
-      '<span class="detail-no">' + m.no + '</span>' + cardStatusBadgeHtml(m) + messageTagsHtml(m) +
+      '<span class="detail-no">' + m.no + '</span>' + cardStatusBadgeHtml(m, me) + messageTagsHtml(m) +
       (m.closedAt ? '<span class="msg-meta">关闭于 ' + fmtTime(m.closedAt) + '</span>' : '') +
     '</div>' +
     '<div class="detail-meta">' +
@@ -2412,7 +2432,10 @@ function renderDetail(id) {
       ? '<div class="detail-info-line"><span class="detail-info-label">分发至：</span><span>' + esc(targets) + '</span></div>'
       : '<div class="detail-info-line"><span class="detail-info-label">分发状态：</span><span>待李倩影分发</span></div>') +
     (ccTargets ? '<div class="detail-info-line"><span class="detail-info-label">抄送：</span><span>' + esc(ccTargets) + '</span></div>' : '') +
-    '<div class="content-box">' + esc(fullContentText(m)) + '</div>' +
+    '<div class="content-row"><div class="content-box">' + esc(fullContentText(m)) + '</div>' +
+      (isRequesterView(me, m) && !isEnded(m)
+        ? '<span class="msg-supplement" onclick="openCommentPanel(\'' + m.id + '\')">我要补充</span>' : '') +
+    '</div>' +
     attsHtml(m.attachments) +
     (m.customerName && me.id !== m.createdBy
       ? '<div class="cust-line"><button class="btn btn-ghost btn-sm" onclick="openCustomer(\'' + esc(m.customerName) + '\')">客户信息</button>' +

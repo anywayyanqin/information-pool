@@ -214,9 +214,22 @@ function isHandlerOf(u, m) {
   return linksOf(m.id).some((l) => recipientsOf(l).includes(u.id));
 }
 
+/* 纯被抄送人＝这条消息对他只有一份"抄送我的"关系（链路抄送或轻量抄送），
+ * 他自己既不承办、也非发起人，更没有分发管理权：只读——不出底栏、不能发言。
+ * 高管另走 isReadOnlyExec，卡片状态也仍按办理态展示，避免两条只读规则互相抢。 */
+function isCcViewerOnly(u, m) {
+  if (!u || !m) return false;
+  if (isAdmin(u) || isDispatcher(u) || isExecRole(u)) return false;
+  if (m.createdBy === u.id) return false;
+  if (isHandlerOf(u, m)) return false;
+  if ((m.sharedUserIds || []).includes(u.id)) return true;
+  return linksOf(m.id).some((l) => ccOf(l).includes(u.id));
+}
+
 /* 回复可见性（覆盖旧「所有参与方可见全部回复」规则）：
  * 总池分发人/管理员与高管看全部处理人回复（高管只读，不可发言）；
  * 处理人可看到所处理信息下的所有回复；
+ * 被抄送/被分享的人看得到全部回复（不进待办、不承担处理义务）；
  * 发起人只能看到自己的回复；
  * 倩影的汇总回复不在此列，对所有可见者开放（详情页时间线的汇总节点）。 */
 function canSeeReply(u, m, r) {
@@ -224,6 +237,7 @@ function canSeeReply(u, m, r) {
   if (isExecRole(u)) return true;
   if (m.status === 'closed') return true;
   if (isHandlerOf(u, m)) return true;
+  if ((m.sharedUserIds || []).includes(u.id)) return true;
   if (linksOf(m.id).some((l) => l.id === r.linkId && ccOf(l).includes(u.id))) return true;
   return r.authorId === u.id;
 }

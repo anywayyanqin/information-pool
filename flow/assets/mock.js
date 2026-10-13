@@ -310,14 +310,6 @@ function buildSeed() {
       createdAt: T(8), updatedAt: T(7)
     },
     {
-      id: 'm6', seq: 6, no: 'M-0006', title: '二季度宏观解读路演安排',
-      content: '机构客户希望安排二季度宏观解读路演，需要产业服务部出解读材料、机构业务一部对接客户。',
-      sources: ['投诉与建议'], customerName: '', sourceOther: '',
-      attachments: [], createdBy: 'u_zs', sourcePoolId: 'p_inst',
-      status: 'handling',
-      createdAt: T(52), updatedAt: T(49)
-    },
-    {
       id: 'm7', seq: 7, no: 'M-0007', title: '华东区域重点客户结算核对',
       content: '客户反馈结算单超过约定时间仍未出具，请尽快联系客户核对账单。',
       sources: ['客需'], customerName: '上海东方能源发展有限公司', sourceOther: '',
@@ -367,16 +359,6 @@ function buildSeed() {
       status: 'processing', isFinal: true,
       dispatchedBy: 'u_qy', dispatchedAt: T(7), note: '请国际业务部排查跨境通道' },
 
-    /* m6：机构 → 机构业务一部（负责人吴迪 + 秘书何静）已回复；→ 银行保险组 许岚 处理中 */
-    { id: 'lk5', messageId: 'm6', poolId: 'p_inst_1', poolType: 'dept', mode: 'node',
-      parentLinkId: null, parentPoolId: 'p_inst', recipientIds: ['u_wd', 'u_hj'], ccIds: [],
-      status: 'replied', isFinal: true,
-      dispatchedBy: 'u_qy', dispatchedAt: T(51), resolvedAt: null, note: '机构业务一部对接客户时间' },
-    { id: 'lk6', messageId: 'm6', poolId: 'p_inst_bank', poolType: 'group', mode: 'person',
-      parentLinkId: 'lk5', parentPoolId: 'p_inst_1', recipientIds: ['u_xu'], ccIds: ['u_wjx'],
-      status: 'pending', isFinal: true,
-      dispatchedBy: 'u_wd', dispatchedAt: T(50), note: '许岚落实路演排期' },
-
     /* m7：买方 → 量化私募部（负责人孙七）已办结并汇总 */
     { id: 'lk7', messageId: 'm7', poolId: 'p_buy_quant', poolType: 'dept', mode: 'node',
       parentLinkId: null, parentPoolId: 'p_buy', recipientIds: ['u_s7'], ccIds: [],
@@ -394,7 +376,6 @@ function buildSeed() {
     { id: 'rp1', messageId: 'm1', poolId: 'p_retail_east', linkId: 'lk1', authorId: 'u_ls', parentReplyId: null, content: '已与客户确认场外期权报价所需材料，可安排报价。客户诉求已闭环。', attachments: [], at: T(47), updatedAt: T(44), lastEditorId: 'u_qy', likeCount: 1, likedByUserIds: ['u_zs'] },
     { id: 'rp2', messageId: 'm2', poolId: 'p_ind_black', linkId: 'lk3', authorId: 'u_hw', parentReplyId: null, content: '已核对，统一按交易所口径更新，详见附件。', attachments: [{ name: '口径说明.docx', size: 12400 }], at: T(26), likeCount: 2, likedByUserIds: ['u_zs', 'u_zm'] },
     { id: 'rp3', messageId: 'm5', poolId: 'p_intl_dept', linkId: 'lk4', authorId: 'u_cl', parentReplyId: null, content: '已定位到跨境短信通道抖动，正在与供应商确认。', attachments: [], at: T(6), likeCount: 0, likedByUserIds: [] },
-    { id: 'rp4', messageId: 'm6', poolId: 'p_inst_1', linkId: 'lk5', authorId: 'u_wd', parentReplyId: null, content: '已安排客户经理对接路演时间。', attachments: [], at: T(50), likeCount: 0, likedByUserIds: [] },
     { id: 'rp5', messageId: 'm7', poolId: 'p_buy_quant', linkId: 'lk7', authorId: 'u_s7', parentReplyId: null, content: '账单差异为交割月调整，已与客户财务确认无误。', attachments: [], at: T(63), likeCount: 1, likedByUserIds: ['u_qy'] },
     { id: 'rp6', messageId: 'm9', poolId: 'p_other_general', linkId: 'lk8', authorId: 'u_mxf', parentReplyId: null, content: '资产配置建议初稿已成型，明日补充套保比例测算。', attachments: [], at: T(2), likeCount: 0, likedByUserIds: [] }
   ];
@@ -419,11 +400,6 @@ function buildSeed() {
     { id: 'lg15', messageId: 'm5', at: T(7),  actorId: 'u_qy',  action: 'dispatched',      note: '分发到 国际业务部（负责人 陈立），抄送 国际池（倪韬雍）' },
     { id: 'lg16', messageId: 'm5', at: T(6),  actorId: 'u_cl',  action: 'reply',           poolId: 'p_intl_dept', note: '已定位到跨境短信通道抖动，正在与供应商确认。' },
 
-    { id: 'lg17', messageId: 'm6', at: T(52), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到机构池' },
-    { id: 'lg18', messageId: 'm6', at: T(51), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 机构业务一部（负责人 吴迪），抄送 机构池（王冀湘）' },
-    { id: 'lg19', messageId: 'm6', at: T(50), actorId: 'u_wd',  action: 'forwarded',       poolId: 'p_inst_1', note: '流转到 银行保险组：落实到许岚，抄送 机构业务一部经理吴迪' },
-    { id: 'lg20', messageId: 'm6', at: T(50), actorId: 'u_wd',  action: 'reply',           poolId: 'p_inst_1', note: '已安排客户经理对接路演时间。' },
-
     { id: 'lg21', messageId: 'm7', at: T(70), actorId: 'u_zs',  action: 'created',         note: '创建消息，投递到买方池' },
     { id: 'lg22', messageId: 'm7', at: T(69), actorId: 'u_qy',  action: 'dispatched',      note: '分发到 量化私募部（负责人 孙七），抄送 买方池（房迪恺）' },
     { id: 'lg23', messageId: 'm7', at: T(63), actorId: 'u_s7',  action: 'reply',           poolId: 'p_buy_quant', note: '账单差异为交割月调整，已与客户财务确认无误。' },
@@ -445,8 +421,6 @@ function buildSeed() {
     { id: 'n8',  at: T(3),  to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm3', content: '董丹璐提交的新消息 M-0003《客户投诉：场外期权结算单出具延迟》已进入中后台池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n9',  at: T(58), to: 'u_qy',  actorId: 'u_ly',  type: 'assign', messageId: 'm4', content: '李研提交的新消息 M-0004《多家同业反馈策略报告延迟发布》已进入零售池，待分发', channel: '企业微信', status: '模拟发送' },
     { id: 'n10', at: T(7),  to: 'u_cl',  actorId: 'u_qy',  type: 'assign', messageId: 'm5', content: '李倩影将消息 M-0005《交易系统早盘登录异常》分发给国际业务部处理', channel: '企业微信', status: '模拟发送' },
-    { id: 'n11', at: T(51), to: 'u_wd',  actorId: 'u_qy',  type: 'assign', messageId: 'm6', content: '李倩影将消息 M-0006《二季度宏观解读路演安排》分发给机构业务一部处理', channel: '企业微信', status: '模拟发送' },
-    { id: 'n12', at: T(51), to: 'u_hj',  actorId: 'u_qy',  type: 'cc',     messageId: 'm6', content: '消息 M-0006《二季度宏观解读路演安排》分发到机构业务一部，抄送你（秘书）', channel: '企业微信', status: '模拟发送' },
     { id: 'n13', at: T(69), to: 'u_s7',  actorId: 'u_qy',  type: 'assign', messageId: 'm7', content: '李倩影将消息 M-0007《华东区域重点客户结算核对》分发给量化私募部处理', channel: '企业微信', status: '模拟发送' },
     { id: 'n14', at: T(60), to: 'u_zs',  actorId: 'u_qy',  type: 'summary', messageId: 'm7', content: '李倩影已发布 M-0007 的汇总回复，信息已完成', channel: '企业微信', status: '模拟发送' },
     { id: 'n15', at: T(20), to: 'u_qy',  actorId: 'u_zs',  type: 'assign', messageId: 'm8', content: '董丹璐提交的新消息 M-0008《重点机构准入补充资料说明》已进入财富池，待分发', channel: '企业微信', status: '模拟发送' },

@@ -48,6 +48,19 @@ function loadState() {
     }
     S.buyerOwnerFixedAt = Date.now();
   }
+  /* 一次性删除 M-0006《二季度宏观解读路演安排》：种子已整条撤走，但用户浏览器里已存的这条
+   * 不会因种子变化而消失，所以落一次迁移，连带它的链路/回复/流转日志/通知一起删。 */
+  if (S && Array.isArray(S.messages) && !S.droppedM6At) {
+    const gone = ['m6'];
+    const notGone = (x) => !gone.includes(x.messageId || x.id);
+    S.messages = S.messages.filter((m) => !gone.includes(m.id));
+    S.links = (S.links || []).filter(notGone);
+    S.replies = (S.replies || []).filter(notGone);
+    S.logs = (S.logs || []).filter(notGone);
+    S.notifications = (S.notifications || []).filter(notGone);
+    S.droppedM6At = Date.now();
+    saveState();
+  }
   /* 已存存档的 seq 可能落后于消息（fork 早期种子写死 seq:6 却发了 9 条消息，新建时撞号）：
    * 只把计数器抬到最大已用值，已发出的编号一律不改 */
   if (S && Array.isArray(S.messages) && S.messages.length) {
@@ -345,6 +358,17 @@ function recordMessageView(msgId) {
   m.viewedBy = Array.isArray(m.viewedBy) ? m.viewedBy : [];
   if (m.viewedBy.includes(me.id)) return;
   m.viewedBy.push(me.id);
+  saveState();
+}
+
+/* 被抄送人的已读标记：与广场浏览数分开记，只服务于工作台「待办 → 已办」的转化 */
+function markCcRead(msgId) {
+  const me = curUser();
+  const m = findMsg(msgId);
+  if (!me || !m || !isCcViewerOnly(me, m)) return;
+  m.ccReadBy = Array.isArray(m.ccReadBy) ? m.ccReadBy : [];
+  if (m.ccReadBy.includes(me.id)) return;
+  m.ccReadBy.push(me.id);
   saveState();
 }
 
@@ -655,6 +679,9 @@ function addReply(msgId, poolId, content, attachments, parentReplyId) {
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canSeeMessage(me, m)) return { ok: false, msg: '无权评论该消息' };
+  /* 被抄送人只读：底栏已不给入口，这里再兜一道，防止其他入口或旧页面绕过 */
+  if (isCcViewerOnly(me, m)) return { ok: false, msg: '这条消息是抄送给你查看的，如需回复请联系处理人' };
+
   if (repliesOf(msgId).length > 0) {
     return { ok: false, msg: '这条消息已有联合回复，请在该回复上点「编辑」补充' };
   }
@@ -704,18 +731,21 @@ function editReply(msgId, replyId, content, attachments) {
   return { ok: true, reply: r };
 }
 
-/* ---------- 动作：分享（轻量抄送）——被分享人可查看并回复，但不建链路、不进待办、不承担确认义务 ---------- */
-function shareMessage(msgId, userIds) {
+/* ---------- 动作：分享（轻量抄送）——被分享人可查看并回复，但不建链路、不进待办、不承担确认义务 ----------
+ * isCc 为真时来自分发弹窗「只勾抄送人」，措辞按抄送记，流转逻辑与分享完全一致 */
+function shareMessage(msgId, userIds, isCc) {
   const me = curUser();
   const m = findMsg(msgId);
   if (!m) return { ok: false, msg: '消息不存在' };
   if (!canShareMessage(me, m)) return { ok: false, msg: '当前身份无权分享' };
   const ids = [...new Set((userIds || []).filter(Boolean))].filter((id) => id !== me.id);
-  if (!ids.length) return { ok: false, msg: '请选择要分享的人员' };
+  if (!ids.length) return { ok: false, msg: isCc ? '请选择抄送人员' : '请选择要分享的人员' };
   m.sharedUserIds = [...new Set((m.sharedUserIds || []).concat(ids))];
   m.updatedAt = Date.now();
-  addLog(m.id, me.id, 'shared', { note: '分享给 ' + ids.map(userName).join('、'), sharedUserIds: ids.slice() });
-  sendWeComNotification(ids, userName(me.id) + ' 与你分享了 ' + m.no + '：' + m.title, m.id, 'share', me.id);
+  addLog(m.id, me.id, 'shared', { note: (isCc ? '抄送给 ' : '分享给 ') + ids.map(userName).join('、'), sharedUserIds: ids.slice() });
+  sendWeComNotification(ids, isCc
+    ? userName(me.id) + ' 抄送你关注 ' + m.no + '：' + m.title
+    : userName(me.id) + ' 与你分享了 ' + m.no + '：' + m.title, m.id, 'share', me.id);
   saveState();
   return { ok: true, count: ids.length };
 }

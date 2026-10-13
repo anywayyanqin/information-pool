@@ -185,6 +185,7 @@ body.workbench-route .wb-table { min-width: 100%; }
 .b-summarize  { background: #e9efff; color: #2f6bff; }
 .b-ended      { background: #e8f7ef; color: #1faa5c; }
 .b-mine       { background: #f0ebff; color: #7b61ff; }
+.b-cc         { background: #eef3f8; color: #5b7c9d; }
 
 /* ---------- 底部固定互动栏（评论 + 点赞 + 收藏，主动作并入右侧） ---------- */
 .action-bar-spacer { height: 156px; }
@@ -484,9 +485,6 @@ body.workbench-route .wb-table { min-width: 100%; }
 .msg-deadline { color: #8a93a8; }
 .msg-deadline.overdue { color: #d92d20; font-weight: 700; }
 .msg-desc { font-size: 13px; color: #2b3346; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.msg-desc-row { display: flex; align-items: baseline; gap: 10px; }
-.msg-desc-row .msg-desc { flex: 1; min-width: 0; }
-.msg-supplement { flex: 0 0 auto; font-size: 12px; color: #2f6bff; white-space: nowrap; cursor: pointer; }
 .msg-latest-reply { font-size: 12px; color: #2b3346; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .empty { text-align: center; color: #9aa3b5; padding: 46px 0; font-size: 13px; }
 
@@ -634,6 +632,10 @@ body.workbench-route .wb-table { min-width: 100%; }
   background: #f8f9fc; border-radius: 8px; padding: 12px; margin-top: 12px;
   font-size: 13px; line-height: 1.7; color: #2b3346; white-space: pre-wrap;
 }
+/* 详情页正文＋右下角的「我要补充」（发起人补充入口，不在工作台卡片上） */
+.content-row { display: flex; align-items: flex-end; gap: 10px; }
+.content-row .content-box { flex: 1; min-width: 0; }
+.msg-supplement { flex: 0 0 auto; padding-bottom: 10px; font-size: 12px; color: #2f6bff; white-space: nowrap; cursor: pointer; }
 .confirm-row { display: flex; gap: 14px; }
 .confirm-card { flex: 1; }
 .confirm-state { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
